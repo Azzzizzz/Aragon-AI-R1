@@ -47,8 +47,7 @@ export async function validateDuplicate(
     select: { pHash: true },
   })
 
-  // Threshold of 5 bits (92% similarity)
-  const isDuplicate = existing.some((img) => img.pHash && hammingDistance(img.pHash, pHash) <= 5)
+  const isDuplicate = existing.some((img) => img.pHash && hammingDistance(img.pHash, pHash) <= HAMMING_THRESHOLD)
 
   return {
     reason: isDuplicate ? RejectionReason.DUPLICATE : null,

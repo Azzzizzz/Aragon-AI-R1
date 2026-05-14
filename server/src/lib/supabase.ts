@@ -15,17 +15,12 @@ export function getPublicUrl(storagePath: string): string {
   return data.publicUrl
 }
 
-export async function createSignedUploadUrl(
-  storagePath: string,
-  expiresIn = 300
-): Promise<string> {
+export async function createSignedUploadUrl(storagePath: string): Promise<string> {
   const { data, error } = await supabase.storage
     .from(STORAGE_BUCKET)
     .createSignedUploadUrl(storagePath, { upsert: false })
 
   if (error) throw new Error(`Failed to create signed upload URL: ${error.message}`)
-  // expiresIn is set via bucket policy; Supabase SDK returns a short-lived token
-  void expiresIn
   return data.signedUrl
 }
 

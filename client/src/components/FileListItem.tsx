@@ -41,10 +41,7 @@ export function FileListItem({ item }: { item: UploadItem }) {
         {item.status === 'error' && item.error && (
           <p className="text-[10px] text-red-400 mt-0.5 truncate">{item.error}</p>
         )}
-        {(item.result as any)?.isDuplicate && (
-          <p className="text-[10px] text-text-dim font-medium mt-0.5">Already uploaded</p>
-        )}
-        {item.status === 'success' && !isRejected && !(item.result as any)?.isDuplicate && (
+        {item.status === 'success' && !isRejected && (
           <p className="text-[10px] text-green-500 font-medium mt-0.5">Ready to process</p>
         )}
         {isRejected && (

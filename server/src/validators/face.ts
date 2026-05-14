@@ -3,11 +3,7 @@ import { detectFaces } from '../lib/faceModel.js'
 
 const MIN_FACE_RATIO = 0.05  // face must be ≥5% of image area
 
-export async function validateFace(
-  buffer: Buffer,
-  _width: number,
-  _height: number
-): Promise<RejectionReason[]> {
+export async function validateFace(buffer: Buffer): Promise<RejectionReason[]> {
   const { count, largestRatio } = await detectFaces(buffer)
   const reasons: RejectionReason[] = []
 

@@ -45,11 +45,11 @@ imagesRouter.post('/upload-url', async (req: express.Request, res: express.Respo
   try {
     const parsed = uploadUrlBodySchema.safeParse(req.body)
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.flatten() })
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' })
       return
     }
 
-    await cleanupStalePending()
+    cleanupStalePending().catch(() => undefined)
 
     const { filename, mimeType } = parsed.data
     const ext = MIME_TO_EXT[mimeType] ?? 'jpg'
@@ -114,7 +114,7 @@ async function runValidationPipeline(record: { id: string; storagePath: string; 
   const { reason: sizeReason, width, height, fileSize } = await validateDimensions(buffer)
 
   // 4. Blur + duplicate (parallel) then face detection (skipped if already rejected)
-  const { reasons: heavyReasons, pHash } = await runValidations(buffer, width ?? 0, height ?? 0)
+  const { reasons: heavyReasons, pHash } = await runValidations(buffer)
 
   // 5. Aggregate
   const allReasons = [...(sizeReason ? [sizeReason] : []), ...heavyReasons]
@@ -126,8 +126,9 @@ async function runValidationPipeline(record: { id: string; storagePath: string; 
       orderBy: { createdAt: 'asc' },
     })
     if (original) {
+      // Use local storagePath (may differ from record.storagePath after HEIC→JPEG conversion)
       await Promise.all([
-        deleteFromStorage(record.storagePath),
+        deleteFromStorage(storagePath),
         db.image.delete({ where: { id: record.id } }),
       ])
       return
@@ -193,7 +194,7 @@ imagesRouter.get('/', async (req: express.Request, res: express.Response) => {
   try {
     const query = listImagesQuerySchema.safeParse(req.query)
     if (!query.success) {
-      res.status(400).json({ error: query.error.flatten() })
+      res.status(400).json({ error: query.error.issues[0]?.message ?? 'Invalid query' })
       return
     }
 

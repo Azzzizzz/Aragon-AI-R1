@@ -13,11 +13,7 @@ export interface ValidationResult {
 // Global limit to ensure only 2 images are processed by the entire server at a time.
 const limit = pLimit(4)
 
-export async function runValidations(
-  buffer: Buffer,
-  width: number,
-  height: number
-): Promise<ValidationResult> {
+export async function runValidations(buffer: Buffer): Promise<ValidationResult> {
   return limit(async () => {
     // Blur + duplicate run in parallel (both cheap: CPU hash + DB query)
     const [blurReason, duplicateResult] = await Promise.all([
@@ -27,7 +23,7 @@ export async function runValidations(
 
     // Skip face detection (expensive ~1.5s) if already rejected
     if (blurReason || duplicateResult.reason) {
-      if (global.gc) global.gc()
+      ;(global as typeof globalThis & { gc?: () => void }).gc?.()
       return {
         reasons: [
           ...(blurReason ? [blurReason] : []),
@@ -37,9 +33,9 @@ export async function runValidations(
       }
     }
 
-    const faceReasons = await validateFace(buffer, width, height)
+    const faceReasons = await validateFace(buffer)
 
-    if (global.gc) global.gc()
+    ;(global as typeof globalThis & { gc?: () => void }).gc?.()
     return { reasons: faceReasons, pHash: duplicateResult.pHash }
   })
 }

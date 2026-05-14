@@ -28,11 +28,13 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  del: (path: string) =>
-    fetch(`${BASE_URL}${path}`, {
+  del: async (path: string): Promise<void> => {
+    const res = await fetch(`${BASE_URL}${path}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-    }),
+    })
+    if (!res.ok && res.status !== 404) throw new Error(`Delete failed: HTTP ${res.status}`)
+  },
 
   // Step 1: ask server for a pre-signed upload URL + create PENDING record
   requestUploadUrl: (filename: string, mimeType: string) =>

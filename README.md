@@ -25,7 +25,7 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 | Database | PostgreSQL via Supabase | Relational, hosted, free tier, PgBouncer pooling |
 | File storage | Supabase Storage | S3-compatible, public-read CDN URLs, service-role-only writes |
 | Image processing | sharp + heic-convert | Native libvips bindings, fast resize/greyscale/raw |
-| Face detection | @vladmandic/face-api + @tensorflow/tfjs-node | Self-contained, no external API key |
+| Face detection | @vladmandic/face-api (TinyFaceDetector) + @tensorflow/tfjs-node | Self-contained, 0.18 MB model, ~5× faster than SSD MobileNet |
 | Perceptual hashing | Custom aHash (average hash) | 64-bit hash, Hamming-distance duplicate detection |
 | File upload | Pre-signed URL (Supabase Storage) | Client uploads directly to storage; server never buffers bytes |
 | Deploy | Vercel (FE) + Railway (BE) | Git-connected, env vars UI |
@@ -44,14 +44,15 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 │  │                   │   │                                 │   │
 │  │  UploadDropzone   │   │  Progress bar (X of N)          │   │
 │  │  react-dropzone   │   │                                 │   │
-│  │  - accept filter  │   │  AcceptedGrid                   │   │
-│  │  - 15MB guard     │   │  useQuery(['images','ACCEPTED']) │   │
+│  │  - accept filter  │   │  SessionGrid (in-place)         │   │
+│  │  - 15MB guard     │   │  blob URL preview + progress    │   │
+│  │                   │   │  ring while validating          │   │
+│  │  FileListItem ×N  │   │                                 │   │
+│  │  stage indicator  │   │  AcceptedGrid                   │   │
+│  │                   │   │  useQuery(['images','ACCEPTED']) │   │
 │  │                   │   │                                 │   │
-│  │  FileListItem ×N  │   │  RejectedGrid                   │   │
-│  │  3-step sequence  │   │  useQuery(['images','REJECTED']) │   │
-│  │  Preparing →      │   │  hover tooltip per reason       │   │
-│  │  Uploading →      │   │                                 │   │
-│  │  Validating → Done│   │                                 │   │
+│  │                   │   │  RejectedGrid                   │   │
+│  │                   │   │  sessionRejected + query cache  │   │
 │  └──┬─────────────┬──┘   └─────────────────────────────────┘   │
 └─────┼─────────────┼───────────────────────────────────────────┘
       │ Step 1+3    │ Step 2 (direct PUT, bypasses server)
@@ -68,20 +69,32 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 │  │ 5. return { uploadUrl, storagePath, id }                │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
-│  POST /api/images/:id/validate                                  │
+│  POST /api/images/:id/validate  → 202 immediately              │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │ 1. findUnique({ status: PENDING_UPLOAD }) → 404 if gone │   │
-│  │ 2. downloadFromStorage(storagePath) → buffer            │   │
-│  │ 3. file-type magic bytes → bail 400 if not jpg/png/heic │   │
-│  │ 4. heic-convert → JPEG (if HEIC), re-upload, swap paths │   │
-│  │ 5. sharp.metadata() → width, height, fileSize           │   │
-│  │ 6. pLimit(1) → Promise.all:                             │   │
-│  │      ├─ Laplacian variance  (blur check)                │   │
-│  │      ├─ aHash 64-bit        (duplicate check vs DB)     │   │
-│  │      └─ face-api SSD v1     (count + box ratio)         │   │
+│  │ 2. Fire-and-forget runValidationPipeline(record)        │   │
+│  │ 3. return 202 { id, status: PENDING_UPLOAD }            │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  runValidationPipeline() — runs in background                   │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ 1. downloadFromStorage(storagePath) → buffer            │   │
+│  │ 2. file-type magic bytes → delete record if invalid     │   │
+│  │ 3. heic-convert → JPEG (if HEIC), re-upload, swap paths │   │
+│  │ 4. sharp.metadata() → width, height, fileSize           │   │
+│  │ 5. pLimit(4) — blur + duplicate in parallel:            │   │
+│  │      ├─ Laplacian variance  (blur, threshold 200)       │   │
+│  │      └─ aHash 64-bit        (duplicate check vs DB)     │   │
+│  │    → early exit if rejected, else face detection:       │   │
+│  │      └─ TinyFaceDetector    (count + box ratio)         │   │
+│  │ 6. DUPLICATE → delete record + storage, return          │   │
 │  │ 7. Aggregate reasons[] → ACCEPTED | REJECTED            │   │
 │  │ 8. prisma.image.update({ status, reasons, dims, ... })  │   │
-│  │ 9. return 201 { id, status, rejectionReasons, ... }     │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  GET /api/images/:id  → polled by client every 2s              │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ returns image record; 404 = duplicate was auto-deleted  │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 │  GET  /api/images?status=&limit=&cursor=                        │
@@ -129,46 +142,37 @@ processFile(file)
       │           browser → Supabase Storage
       │           on failure: DELETE /api/images/:id to clean up PENDING row
       │
-      ├─ FileListItem: "Validating…"
+      ├─ SessionGrid slot: circular progress ring "Validating…"
+      │  (image visible immediately via local blob URL)
       │
-      ▼  STEP 3 ── POST /api/images/:id/validate
+      ▼  STEP 3 ── POST /api/images/:id/validate  → 202 immediately
+      │            server fires runValidationPipeline() in background
       │
+      ├─ client polls GET /api/images/:id every 2s
+      │
+      │  ┌─ server background pipeline ──────────────────────────┐
+      │  │ downloadFromStorage → buffer                          │
+      │  │ validateFormat (magic bytes)                          │
+      │  │   invalid → delete record + storage → 404 on next poll│
+      │  │ heic-convert → JPEG if needed                        │
+      │  │ validateDimensions → TOO_SMALL?                       │
+      │  │ pLimit(4):                                            │
+      │  │   validateBlur + validateDuplicate  (parallel)        │
+      │  │   → early exit if either rejects                      │
+      │  │   → else validateFace (TinyFaceDetector)              │
+      │  │ DUPLICATE → delete record + storage → 404 on next poll│
+      │  │ prisma.image.update({ status, reasons, dims, pHash }) │
+      │  └───────────────────────────────────────────────────────┘
+      │
+      ▼  poll response:
+    404 → duplicate or invalid format
+      ├── toast "Already uploaded", slot removed after 3s
+      │
+    status !== PENDING_UPLOAD → result ready
       ▼
-downloadFromStorage(storagePath)    ← server fetches bytes from Supabase
-      │
-      ▼
-validateFormat(buffer)              ← file-type reads magic bytes
-      │  not jpg/png/heic?
-      ├──────────► 400, storage + DB row deleted, error toast
-      │
-      ▼
-HEIC? → heic-convert → JPEG → re-upload as .jpg → delete HEIC original
-      │
-      ▼
-validateDimensions(buffer)          ← sharp.metadata()
-      │  w<800 or h<800 or <50KB?
-      ├──────────► TOO_SMALL added to reasons[]
-      │
-      ▼
-pLimit(1) → Promise.all([
-  validateBlur(buffer),             ← Laplacian variance on 256×256 greyscale
-  validateDuplicate(buffer),        ← aHash → Hamming vs last 1000 DB hashes
-  validateFace(buffer)              ← face-api SSD MobileNet v1
-])
-      │
-      ▼
-Aggregate reasons[] → status = reasons.length === 0 ? ACCEPTED : REJECTED
-      │
-      ▼
-prisma.image.update({ status, rejectionReasons, publicUrl, pHash, dims, ... })
-      │  storage object kept regardless — UI renders preview for rejected too
-      ▼
-201 { id, status, rejectionReasons, publicUrl, width, height, ... }
-      │
-      ▼  back in browser
-FileListItem → spinner becomes ✓ or ✗
-TanStack Query invalidates ['images'] → AcceptedGrid + RejectedGrid refetch
-Card appears in the correct grid
+ACCEPTED → slot stays in SessionGrid, spinner removed, ImageCard rendered
+REJECTED → slot removed from SessionGrid, image injected into RejectedGrid
+           (derived from sessionRejected in UploadPage — no refetch needed)
 ```
 
 ---
@@ -182,9 +186,9 @@ All 6 rules from the spec are implemented as **pure functions** in `server/src/v
 | 1 | `TOO_SMALL` | width < 800px **or** height < 800px **or** fileSize < 50 KB | sharp | `sharp(buffer).metadata()` → check w/h; `buffer.length` for size |
 | 2 | `INVALID_FORMAT` | MIME not `image/jpeg`, `image/png`, or `image/heic` | file-type | Reads first 12 magic bytes from buffer — extension alone is not trusted |
 | 3 | `DUPLICATE` | Hamming distance ≤ 10 bits vs any of last 1 000 hashes | custom aHash | Resize to 8×8 greyscale → 64-bit average hash (16 hex chars) → XOR each nibble → count set bits |
-| 4 | `BLURRY` | Laplacian variance < 100 | sharp | Resize to 256×256 greyscale → apply Laplacian kernel `[0,1,0 / 1,-4,1 / 0,1,0]` over every pixel → compute variance of responses |
-| 5 | `FACE_TOO_SMALL` | largest face box area / image area < 0.05 (5%) | @vladmandic/face-api | SSD MobileNet v1, min confidence 0.5, tf.node.decodeImage for buffer → native tensor |
-| 6 | `MULTIPLE_FACES` / `NO_FACE` | detections.length > 1 or === 0 | @vladmandic/face-api | Same detection pass as rule 5 |
+| 4 | `BLURRY` | Laplacian variance < 200 | sharp | Resize to 256×256 greyscale → apply Laplacian kernel `[0,1,0 / 1,-4,1 / 0,1,0]` over every pixel → compute variance of responses |
+| 5 | `FACE_TOO_SMALL` | largest face box area / image area < 0.05 (5%) | @vladmandic/face-api | TinyFaceDetector (0.18 MB), inputSize 416, score threshold 0.5 — image resized to 640×640 before inference |
+| 6 | `MULTIPLE_FACES` / `NO_FACE` | detections.length > 1 or === 0 | @vladmandic/face-api | Same detection pass as rule 5. Face check is skipped entirely if blur or duplicate already rejected the image |
 
 > **HEIC handling:** HEIC files pass the format check, then `heic-convert` converts the buffer to JPEG (quality 0.9) before any downstream processing. The stored file and all metadata reflect the converted JPEG.
 
@@ -236,15 +240,33 @@ URL expires in **300 seconds**. Re-request `upload-url` if expired.
 
 ### `POST /api/images/:id/validate`
 
-Download from storage, validate, and update the DB record.
+Kick off background validation. Returns **immediately** — validation runs asynchronously. Client polls `GET /api/images/:id` for the result.
 
-**Response `201`**
+**Response `202`**
+
+```json
+{ "id": "cmp53azb4000cpfrhqcf525mb", "status": "PENDING_UPLOAD" }
+```
+
+**Error responses**
+
+| Status | When |
+|---|---|
+| `404` | Record not found or already processed |
+| `500` | DB failure |
+
+---
+
+### `GET /api/images/:id`
+
+Fetch a single image — used by the client polling loop every 2 seconds until `status` leaves `PENDING_UPLOAD`.
+
+**Response `200`**
 
 ```json
 {
   "id": "cmp53azb4000cpfrhqcf525mb",
   "filename": "selfie.jpg",
-  "storagePath": "dc1a3fad-1aab-4bd5-921c-0b4835884ea9.jpg",
   "publicUrl": "https://<project>.supabase.co/storage/v1/object/public/AG-v1/<uuid>.jpg",
   "status": "ACCEPTED",
   "rejectionReasons": [],
@@ -252,19 +274,16 @@ Download from storage, validate, and update the DB record.
   "height": 3200,
   "fileSize": 892113,
   "mimeType": "image/jpeg",
-  "pHash": "a3f07c1e4b8d2096",
-  "createdAt": "2026-05-14T06:10:50.560Z",
-  "updatedAt": "2026-05-14T06:10:50.560Z"
+  "createdAt": "2026-05-14T06:10:50.560Z"
 }
 ```
 
-**Error responses**
+> **`404` means duplicate or invalid format** — the server auto-deleted the record. The client treats this as "Already uploaded" and removes the slot.
 
 | Status | When |
 |---|---|
-| `400` | File not found in storage / invalid format |
-| `404` | Record not found or already validated |
-| `500` | Storage, conversion, or DB failure |
+| `404` | Record auto-deleted (duplicate or invalid format) |
+| `500` | DB failure |
 
 ---
 
@@ -374,11 +393,12 @@ model Image {
 │       ├── pages/
 │       │   └── UploadPage.tsx      Full layout — two-panel, queries, progress bar
 │       ├── components/
-│       │   ├── UploadDropzone.tsx  Drag-and-drop area, per-file useMutation
-│       │   ├── FileListItem.tsx    Upload row — icon, filename, spinner/check/✗
-│       │   ├── ImageCard.tsx       Thumbnail + trash + hover tooltip
-│       │   ├── AcceptedGrid.tsx    Accepted image grid (presentational)
-│       │   └── RejectedGrid.tsx    Rejected section with "Didn't Meet Guidelines"
+│       │   ├── UploadDropzone.tsx  Drag-and-drop, per-file upload + polling loop
+│       │   ├── SessionGrid.tsx     In-place grid — processing → accepted in same slot
+│       │   ├── FileListItem.tsx    Left-panel upload row — stage label + icon
+│       │   ├── ImageCard.tsx       Thumbnail + trash + hover tooltip for reason
+│       │   ├── AcceptedGrid.tsx    Historical accepted images (presentational)
+│       │   └── RejectedGrid.tsx    sessionRejected + historical rejected, with reasons
 │       ├── lib/
 │       │   ├── api.ts              requestUploadUrl, uploadDirect, validateUpload, del
 │       │   ├── rejectionMessages.ts enum → { label, tooltip }
@@ -402,7 +422,7 @@ model Image {
         │   └── index.ts            runValidations() → Promise.all of heavy checks
         ├── lib/
         │   ├── supabase.ts         service-role client, uploadToStorage, deleteFromStorage
-        │   └── faceModel.ts        SSD MobileNet — loadFromDisk once at boot
+        │   └── faceModel.ts        TinyFaceDetector — loadFromDisk once at boot, 640px resize
         ├── index.ts                Express app, CORS, route mount, model preload
         ├── db.ts                   Prisma client singleton
         ├── schemas.ts              Zod: listImagesQuerySchema
@@ -439,17 +459,21 @@ Client uploads directly to Supabase Storage; the server never holds the raw byte
 
 The alternative (proxy upload) was the original design. It keeps validation atomic in one request, but the server must buffer the entire file in RAM alongside Sharp decode + TF.js inference — which reliably hits the 512 MB ceiling on larger images.
 
-### 2 — Synchronous validation per file, parallel requests from client
+### 2 — Async fire-and-forget validation with client polling
 
-Each file fires its own `POST` in parallel from the browser. The user sees per-file spinners resolve independently — identical UX to async, without a job queue. Inside one request, the three expensive checks (`blur`, `pHash`, `face`) run in `Promise.all` so wall time is `max(three)` not `sum(three)`.
+`POST /:id/validate` returns `202` immediately; `runValidationPipeline` runs in the background. The client polls `GET /api/images/:id` every 2 seconds until `status` leaves `PENDING_UPLOAD`. All files start their pipeline in parallel — the user sees per-image progress rings resolve independently as each one finishes.
+
+Inside the pipeline, blur + duplicate detection run in `Promise.all` (both are cheap CPU ops). Face detection is skipped entirely if either of those already rejected the image — eliminating the 1.5s TensorFlow inference on obviously bad photos.
 
 ### 3 — Validators as pure functions
 
 `(buffer, metadata) => reason | null`. Stateless, composable, easy to unit-test, share across endpoints. The composition layer (`validators/index.ts`) handles parallelism.
 
-### 4 — Face model loaded once at server boot
+### 4 — TinyFaceDetector over SSD MobileNet
 
-`faceapi.nets.ssdMobilenetv1.loadFromDisk(...)` runs before `app.listen()`. Every subsequent request reuses the in-memory model. First request after a cold start pays no extra penalty.
+Switched from SSD MobileNet v1 (5.4 MB) to TinyFaceDetector (0.18 MB) — 30× smaller, ~5× faster inference. Images are resized to 640×640 before decoding into a TF tensor, reducing memory spike per validation from ~200 MB to ~40 MB, which matters on a 512 MB Render instance.
+
+The model loads once at boot via `faceapi.nets.tinyFaceDetector.loadFromDisk(...)` before `app.listen()`. Every subsequent request reuses the in-memory weights.
 
 ### 5 — One Image table, denormalized
 
