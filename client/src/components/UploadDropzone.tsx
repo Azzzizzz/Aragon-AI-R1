@@ -126,7 +126,7 @@ export function UploadDropzone({ items, setItems }: Props) {
   })
 
   return (
-    <div className="flex flex-col h-full overflow-hidden p-6 gap-3">
+    <div className="flex flex-col md:h-full md:overflow-hidden p-6 gap-3">
       <div
         {...getRootProps()}
         className={[
@@ -164,11 +164,11 @@ export function UploadDropzone({ items, setItems }: Props) {
       </div>
 
       {items.length > 0 && (
-        <div className="flex flex-col flex-1 min-h-0">
+        <div className="flex flex-col md:flex-1 min-h-0">
           <p className="text-[10px] text-text-mute px-1 mb-2">
             It can take up to 1 minute to upload
           </p>
-          <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1 pr-1 custom-scrollbar">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1 pr-1 custom-scrollbar max-h-[300px] md:max-h-none">
             {items.map((item) => (
               <FileListItem key={item.clientId} item={item} />
             ))}

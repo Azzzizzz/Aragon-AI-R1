@@ -202,9 +202,9 @@ export function UploadPage() {
   const isGreen = progressPct >= 80
 
   return (
-    <div className="flex flex-col md:flex-row h-screen overflow-hidden bg-background transition-colors duration-300">
+    <div className="flex flex-col md:flex-row min-h-screen bg-background transition-colors duration-300">
       {/* ── Left panel ── */}
-      <aside className="w-full md:w-80 h-full md:shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-border bg-surface-muted/50 overflow-hidden">
+      <aside className="w-full md:w-80 md:h-screen md:shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-border bg-surface-muted/50 md:sticky md:top-0">
         <div className="p-6 pb-0 flex flex-col gap-6">
           <div>
             <div className="flex items-center justify-between mb-4">
@@ -230,9 +230,9 @@ export function UploadPage() {
       </aside>
 
       {/* ── Right panel ── */}
-      <main className="flex-1 h-full md:overflow-y-auto">
+      <main className="flex-1 md:h-full md:overflow-y-auto">
         {/* Progress bar — sticky on desktop */}
-        <div className="md:sticky top-0 z-10 bg-background/90 backdrop-blur-sm border-b border-border py-4">
+        <div className="sticky top-0 z-10 bg-background/90 backdrop-blur-sm border-b border-border py-4">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 flex items-center gap-3 sm:gap-4">
             <span className="text-sm font-medium text-text shrink-0">Uploaded Images</span>
             <div className="flex-1 h-2 rounded-full bg-surface overflow-hidden">
@@ -319,7 +319,7 @@ export function UploadPage() {
                 </div>
                 <p className="text-sm font-medium text-text">No images yet</p>
                 <p className="text-xs text-text-mute mt-1 max-w-xs mx-auto">
-                  Upload your best portrait photos from the panel on the left to get started
+                  Upload your best portrait photos above to get started
                 </p>
               </div>
             )}
