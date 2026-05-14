@@ -22,7 +22,6 @@ loadFaceModels()
     app.listen(PORT)
   })
   .catch((err) => {
-    // @ts-expect-error - HTMLImageElement is a browser type, but face-api uses it in its signatures
     console.error('Failed to load face detection model:', err)
     process.exit(1)
   })

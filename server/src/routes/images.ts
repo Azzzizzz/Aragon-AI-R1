@@ -127,7 +127,7 @@ imagesRouter.get('/', async (req: express.Request, res: express.Response) => {
 imagesRouter.delete('/:id', async (req: express.Request, res: express.Response) => {
   try {
     const image = await db.image.findUnique({
-      where: { id: req.params.id },
+      where: { id: req.params.id as string },
       select: { storagePath: true },
     })
 
@@ -138,7 +138,7 @@ imagesRouter.delete('/:id', async (req: express.Request, res: express.Response) 
 
     await Promise.all([
       deleteFromStorage(image.storagePath),
-      db.image.delete({ where: { id: req.params.id } }),
+      db.image.delete({ where: { id: req.params.id as string } }),
     ])
 
     res.status(204).send()
