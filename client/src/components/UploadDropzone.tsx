@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { useDropzone, type FileRejection } from 'react-dropzone'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -27,9 +27,13 @@ function setItemField(
   return prev.map((it) => (it.clientId === clientId ? { ...it, ...patch } : it))
 }
 
-export function UploadDropzone() {
+interface Props {
+  items: UploadItem[]
+  setItems: React.Dispatch<React.SetStateAction<UploadItem[]>>
+}
+
+export function UploadDropzone({ items, setItems }: Props) {
   const queryClient = useQueryClient()
-  const [items, setItems] = useState<UploadItem[]>([])
 
   const isUploading = items.some(
     (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'

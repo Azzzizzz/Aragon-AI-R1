@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import type { UploadItem } from '../components/FileListItem'
 import {
   ChevronDown,
   ChevronUp,
@@ -19,6 +20,7 @@ import { api } from '../lib/api'
 import { UploadDropzone } from '../components/UploadDropzone'
 import { AcceptedGrid } from '../components/AcceptedGrid'
 import { RejectedGrid } from '../components/RejectedGrid'
+import { ProcessingGrid } from '../components/ProcessingGrid'
 import { ThemeToggle } from '../components/ThemeToggle'
 import type { ImagesResponse } from '../types'
 
@@ -72,6 +74,8 @@ function Restriction({ icon, text }: { icon: React.ReactNode; text: string }) {
 }
 
 export function UploadPage() {
+  const [items, setItems] = useState<UploadItem[]>([])
+
   const { data: acceptedData, isLoading: acceptedLoading } = useQuery({
     queryKey: ['images', 'ACCEPTED'],
     queryFn: () => api.get<ImagesResponse>('/api/images?status=ACCEPTED&limit=50'),
@@ -83,7 +87,11 @@ export function UploadPage() {
 
   const accepted = acceptedData?.items ?? []
   const rejected = rejectedData?.items ?? []
-  const total = accepted.length + rejected.length
+  const processingItems = items.filter(
+    (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
+  )
+
+  const total = accepted.length + rejected.length + processingItems.length
   const target = Math.max(total, 10)
   const progressPct = target === 0 ? 0 : Math.round((accepted.length / target) * 100)
   const isGreen = progressPct >= 80
@@ -112,7 +120,7 @@ export function UploadPage() {
         </div>
 
         <div className="flex-1 min-h-0">
-          <UploadDropzone />
+          <UploadDropzone items={items} setItems={setItems} />
         </div>
       </aside>
 
@@ -175,6 +183,9 @@ export function UploadPage() {
           </Collapsible>
 
           <div className="space-y-8 min-h-[400px]">
+            {/* In-flight images — appear immediately on upload, before validation */}
+            <ProcessingGrid items={processingItems} />
+
             {/* Accepted grid */}
             <AcceptedGrid images={accepted} isLoading={acceptedLoading} />
 
@@ -185,8 +196,8 @@ export function UploadPage() {
               acceptedCount={accepted.length}
             />
 
-            {/* Empty state */}
-            {!acceptedLoading && !rejectedLoading && total === 0 && (
+            {/* Empty state — hide when anything is in flight */}
+            {!acceptedLoading && !rejectedLoading && total === 0 && processingItems.length === 0 && (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-surface-muted flex items-center justify-center mb-4 border border-border">
                   <FileImage className="w-7 h-7 text-text-dim" />
