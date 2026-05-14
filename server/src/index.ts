@@ -19,9 +19,7 @@ app.use('/api/images', imagesRouter)
 // Load face detection model before accepting requests
 loadFaceModels()
   .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`)
-    })
+    app.listen(PORT)
   })
   .catch((err) => {
     console.error('Failed to load face detection model:', err)

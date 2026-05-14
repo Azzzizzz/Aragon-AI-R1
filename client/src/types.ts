@@ -12,7 +12,6 @@ export type ImageStatus = 'ACCEPTED' | 'REJECTED'
 export interface Image {
   id: string
   filename: string
-  storagePath: string
   publicUrl: string
   status: ImageStatus
   rejectionReasons: RejectionReason[]
@@ -20,9 +19,11 @@ export interface Image {
   width: number
   height: number
   mimeType: string
-  pHash: string | null
   createdAt: string
-  updatedAt: string
+  // present on POST response, omitted from GET select
+  storagePath?: string
+  pHash?: string | null
+  updatedAt?: string
 }
 
 export interface ImagesResponse {
