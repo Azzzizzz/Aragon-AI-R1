@@ -51,9 +51,19 @@ export function UploadDropzone() {
         setItems((prev) => setItemField(prev, clientId, { status: 'validating' }))
 
         // Step 3 — ask server to validate
-        const result = await api.validateUpload(id)
-        setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
-        queryClient.invalidateQueries({ queryKey: ['images'] })
+        const result = (await api.validateUpload(id)) as any
+        
+        if (result.isDuplicate) {
+          setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
+          toast.info(`${file.name}: Already uploaded`)
+          // Auto-remove duplicates from the sidebar after 3 seconds to keep it clean
+          setTimeout(() => {
+            setItems((prev) => prev.filter(it => it.clientId !== clientId))
+          }, 3000)
+        } else {
+          setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
+          queryClient.invalidateQueries({ queryKey: ['images'] })
+        }
       } catch (err) {
         const message = (err as Error).message || 'Upload failed'
         setItems((prev) => setItemField(prev, clientId, { status: 'error', error: message }))

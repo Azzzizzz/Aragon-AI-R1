@@ -129,6 +129,27 @@ imagesRouter.post('/:id/validate', async (req: express.Request, res: express.Res
 
     // 5. Aggregate + determine status
     const allReasons = [...(sizeReason ? [sizeReason] : []), ...heavyReasons]
+    
+    // 5b. Special handling for DUPLICATES to prevent UI clutter
+    if (allReasons.includes('DUPLICATE')) {
+      // Find the original image that this is a duplicate of
+      const original = await db.image.findFirst({
+        where: { pHash, id: { not: record.id } },
+        orderBy: { createdAt: 'asc' }
+      })
+
+      if (original) {
+        // Clean up the redundant upload
+        await Promise.all([
+          deleteFromStorage(record.storagePath),
+          db.image.delete({ where: { id: record.id } }),
+        ])
+        // Return the original so the UI can highlight it or just ignore it
+        res.status(200).json({ ...original, isDuplicate: true })
+        return
+      }
+    }
+
     const status = allReasons.length === 0 ? ImageStatus.ACCEPTED : ImageStatus.REJECTED
 
     // 6. Persist result (storage object kept regardless of status for preview)
