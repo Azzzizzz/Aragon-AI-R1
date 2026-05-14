@@ -7,49 +7,51 @@ const HAMMING_THRESHOLD = 10 // bits different → duplicate
 const LOOKUP_LIMIT = 1000    // only compare against most recent N images
 
 // Average-hash (aHash): resize → greyscale → compare each pixel to mean
-async function computeHash(buffer: Buffer): Promise<string> {
+async function generateHash(buffer: Buffer): Promise<string> {
   const { data } = await sharp(buffer)
     .resize(HASH_SIZE, HASH_SIZE, { fit: 'fill' })
     .greyscale()
     .raw()
     .toBuffer({ resolveWithObject: true })
 
-  const avg = data.reduce((s, v) => s + v, 0) / data.length
+  let sum = 0
+  for (let i = 0; i < data.length; i++) {
+    sum += data[i]
+  }
+  const avg = sum / data.length
 
-  let bits = ''
-  for (let i = 0; i < data.length; i++) bits += data[i] >= avg ? '1' : '0'
-
-  // Pack 64 bits into 16 hex chars
-  let hex = ''
-  for (let i = 0; i < 64; i += 4) hex += parseInt(bits.slice(i, i + 4), 2).toString(16)
-  return hex
+  let hash = ''
+  for (let i = 0; i < data.length; i++) {
+    hash += data[i] >= avg ? '1' : '0'
+  }
+  return hash
 }
 
-function hammingDistance(a: string, b: string): number {
+function hammingDistance(h1: string, h2: string): number {
   let dist = 0
-  for (let i = 0; i < a.length; i++) {
-    const xor = parseInt(a[i], 16) ^ parseInt(b[i], 16)
-    dist += xor.toString(2).split('1').length - 1
+  for (let i = 0; i < h1.length; i++) {
+    if (h1[i] !== h2[i]) dist++
   }
   return dist
 }
 
-export async function validateDuplicate(buffer: Buffer): Promise<{
-  reason: RejectionReason | null
-  pHash: string
-}> {
-  const pHash = await computeHash(buffer)
+export async function validateDuplicate(
+  buffer: Buffer
+): Promise<{ reason: RejectionReason | null; pHash: string }> {
+  const pHash = await generateHash(buffer)
 
+  // Check against latest 1000 images (sliding window for performance)
   const existing = await db.image.findMany({
-    where: { pHash: { not: null } },
+    take: 1000,
     orderBy: { createdAt: 'desc' },
-    take: LOOKUP_LIMIT,
     select: { pHash: true },
   })
 
-  const isDuplicate = existing.some(
-    (r) => r.pHash && hammingDistance(pHash, r.pHash) <= HAMMING_THRESHOLD
-  )
+  // Threshold of 5 bits (92% similarity)
+  const isDuplicate = existing.some((img) => img.pHash && hammingDistance(img.pHash, pHash) <= 5)
 
-  return { reason: isDuplicate ? RejectionReason.DUPLICATE : null, pHash }
+  return {
+    reason: isDuplicate ? RejectionReason.DUPLICATE : null,
+    pHash,
+  }
 }
