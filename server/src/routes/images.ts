@@ -15,7 +15,7 @@ export const imagesRouter = express.Router()
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 120 * 1024 * 1024 }, // 120 MB
+  limits: { fileSize: 15 * 1024 * 1024 }, // Lowered to 15MB to prevent OOM
 })
 
 // POST /api/images — upload + validate a single image
@@ -78,8 +78,9 @@ imagesRouter.post('/', upload.single('file'), async (req: express.Request, res: 
 
     res.status(201).json(image)
   } catch (err) {
-    console.error('POST /api/images error:', err)
-    res.status(500).json({ error: 'Upload failed' })
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('POST /api/images error:', message)
+    res.status(500).json({ error: message })
   }
 })
 

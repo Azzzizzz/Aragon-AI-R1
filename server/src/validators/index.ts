@@ -15,15 +15,16 @@ export async function runValidations(
   width: number,
   height: number
 ): Promise<ValidationResult> {
-  const [blurReason, duplicateResult, faceReasons] = await Promise.all([
-    validateBlur(buffer),
-    validateDuplicate(buffer),
-    validateFace(buffer, width, height),
-  ])
+  // Run checks sequentially to keep peak memory low on 512MB instances
+  const blurReason = await validateBlur(buffer)
+  const duplicateResult = await validateDuplicate(buffer)
+  const faceReasons = await validateFace(buffer, width, height)
 
-  const reasons = [blurReason, duplicateResult.reason, ...faceReasons].filter(
-    (r): r is RejectionReason => r !== null
-  )
+  const reasons = [
+    ...(blurReason ? [blurReason] : []),
+    ...(duplicateResult.reason ? [duplicateResult.reason] : []),
+    ...faceReasons
+  ]
 
   return { reasons, pHash: duplicateResult.pHash }
 }

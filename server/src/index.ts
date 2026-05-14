@@ -1,8 +1,12 @@
 import './config.js'
 import express from 'express'
 import cors from 'cors'
+import sharp from 'sharp'
 import { loadFaceModels } from './lib/faceModel.js'
 import { imagesRouter } from './routes/images.js'
+
+// 1. Memory Optimization: Disable sharp cache to prevent OOM on 512MB instances
+sharp.cache(false)
 
 const app = express()
 const PORT = process.env.PORT || 3000
