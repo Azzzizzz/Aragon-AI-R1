@@ -10,9 +10,8 @@ export interface ValidationResult {
   pHash: string
 }
 
-// Global limit to ensure only 1 image is processed by the entire server at a time.
-// This is critical for staying under 512MB RAM with face detection.
-const limit = pLimit(1)
+// Global limit to ensure only 2 images are processed by the entire server at a time.
+const limit = pLimit(2)
 
 export async function runValidations(
   buffer: Buffer,
