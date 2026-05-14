@@ -14,7 +14,7 @@
 - Backend: Node + Express + TypeScript + Prisma (v6)
 - DB: PostgreSQL (Supabase) + Connection Pooling (PgBouncer)
 - Storage: Supabase Storage (presigned upload URL flow)
-- Deploy: Vercel (frontend) + Render/Railway (backend)
+- Deploy: Vercel (frontend) + Render (backend)
 
 ---
 

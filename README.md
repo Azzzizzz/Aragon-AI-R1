@@ -8,8 +8,8 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 
 | | URL |
 |---|---|
-| App (Vercel) | _deploy pending_ |
-| API (Railway) | _deploy pending_ |
+| App (Vercel) | https://aragon-ai-r1.vercel.app |
+| API (Render) | https://aragon-ai-r1.onrender.com |
 
 ---
 
@@ -28,7 +28,7 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 | Face detection | @vladmandic/face-api (TinyFaceDetector) + @tensorflow/tfjs-node | Self-contained, 0.18 MB model, ~5× faster than SSD MobileNet |
 | Perceptual hashing | Custom aHash (average hash) | 64-bit hash, Hamming-distance duplicate detection |
 | File upload | Pre-signed URL (Supabase Storage) | Client uploads directly to storage; server never buffers bytes |
-| Deploy | Vercel (FE) + Railway (BE) | Git-connected, env vars UI |
+| Deploy | Vercel (FE) + Render (BE) | Git-connected, env vars UI |
 
 ---
 
@@ -58,7 +58,7 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
       │ Step 1+3    │ Step 2 (direct PUT, bypasses server)
       ▼             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              EXPRESS SERVER  :3000  (Railway)                   │
+│              EXPRESS SERVER  :3000  (Render)                    │
 │                                                                 │
 │  POST /api/images/upload-url                                    │
 │  ┌─────────────────────────────────────────────────────────┐   │
@@ -196,7 +196,7 @@ All 6 rules from the spec are implemented as **pure functions** in `server/src/v
 
 ## API Reference
 
-Base URL: `http://localhost:3000` (dev) · `<Railway URL>` (prod)
+Base URL: `http://localhost:3000` (dev) · `https://aragon-ai-r1.onrender.com` (prod)
 
 All responses are JSON. No envelopes — data returned directly. Errors: `{ "error": "..." }`.
 
