@@ -14,7 +14,7 @@ const ACCEPTED_TYPES = {
   'image/heif': ['.heif'],
 }
 
-const MAX_SIZE = 120 * 1024 * 1024
+const MAX_SIZE = 15 * 1024 * 1024
 
 function makeId() {
   return Math.random().toString(36).slice(2)
@@ -52,7 +52,7 @@ export function UploadDropzone() {
     (accepted: File[], rejected: FileRejection[]) => {
       rejected.forEach((r) => {
         const code = r.errors[0]?.code
-        if (code === 'file-too-large') toast.error(`${r.file.name}: exceeds 120 MB limit`)
+        if (code === 'file-too-large') toast.error(`${r.file.name}: exceeds 15 MB limit`)
         else if (code === 'file-invalid-type') toast.error(`${r.file.name}: unsupported format`)
         else toast.error(`${r.file.name}: rejected`)
       })
@@ -110,7 +110,7 @@ export function UploadDropzone() {
           <p className="text-xs text-text-dim">
             {isDragActive ? 'Drop images here' : 'Click to upload or drag and drop'}
           </p>
-          <p className="text-[10px] text-text-mute mt-0.5">PNG, JPG, HEIC up to 120MB</p>
+          <p className="text-[10px] text-text-mute mt-0.5">PNG, JPG, HEIC up to 15MB</p>
         </div>
       </div>
 
@@ -119,7 +119,7 @@ export function UploadDropzone() {
           <p className="text-[10px] text-text-mute px-1">
             It can take up to 1 minute to upload
           </p>
-          <div className="max-h-60 overflow-y-auto">
+          <div className="max-h-60 overflow-y-auto overflow-x-hidden pr-1">
             {items.map((item) => (
               <FileListItem key={item.clientId} item={item} />
             ))}
