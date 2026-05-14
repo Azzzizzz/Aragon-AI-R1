@@ -6,3 +6,8 @@ export const listImagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().cuid().optional(),
 })
+
+export const uploadUrlBodySchema = z.object({
+  filename: z.string().min(1).max(255),
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/heic', 'image/heif']),
+})

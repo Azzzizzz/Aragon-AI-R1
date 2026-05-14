@@ -7,7 +7,7 @@ export type RejectionReason =
   | 'MULTIPLE_FACES'
   | 'NO_FACE'
 
-export type ImageStatus = 'ACCEPTED' | 'REJECTED'
+export type ImageStatus = 'PENDING_UPLOAD' | 'ACCEPTED' | 'REJECTED'
 
 export interface Image {
   id: string

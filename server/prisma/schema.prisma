@@ -9,6 +9,7 @@ datasource db {
 }
 
 enum ImageStatus {
+  PENDING_UPLOAD
   ACCEPTED
   REJECTED
 }
@@ -28,12 +29,12 @@ model Image {
   filename         String
   storagePath      String            @unique
   publicUrl        String
-  status           ImageStatus
+  status           ImageStatus       @default(PENDING_UPLOAD)
   rejectionReasons RejectionReason[]
-  fileSize         Int
-  width            Int
-  height           Int
-  mimeType         String
+  fileSize         Int?
+  width            Int?
+  height           Int?
+  mimeType         String?
   pHash            String?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt

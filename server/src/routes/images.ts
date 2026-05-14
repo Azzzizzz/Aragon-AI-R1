@@ -1,69 +1,140 @@
 import express from 'express'
-import multer from 'multer'
 import { randomUUID } from 'crypto'
 import { ImageStatus } from '@prisma/client'
 // @ts-expect-error - heic-convert does not have type definitions
 import heicConvert from 'heic-convert'
 import { db } from '../db.js'
-import { uploadToStorage, deleteFromStorage } from '../lib/supabase.js'
+import {
+  createSignedUploadUrl,
+  downloadFromStorage,
+  uploadToStorage,
+  deleteFromStorage,
+  getPublicUrl,
+  STORAGE_BUCKET,
+} from '../lib/supabase.js'
+import { supabase } from '../lib/supabase.js'
 import { validateFormat } from '../validators/format.js'
 import { validateDimensions } from '../validators/dimensions.js'
 import { runValidations } from '../validators/index.js'
-import { listImagesQuerySchema } from '../schemas.js'
+import { listImagesQuerySchema, uploadUrlBodySchema } from '../schemas.js'
 
 export const imagesRouter = express.Router()
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 }, // Lowered to 15MB to prevent OOM
-})
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png':  'png',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+}
 
-// POST /api/images — upload + validate a single image
-imagesRouter.post('/', upload.single('file'), async (req: express.Request, res: express.Response) => {
+// Lazily delete PENDING_UPLOAD rows (+ their storage objects) older than 30 min.
+// Called at the start of every upload-url request to self-heal without a cron job.
+async function cleanupStalePending(): Promise<void> {
+  const cutoff = new Date(Date.now() - 30 * 60 * 1000)
+  const stale = await db.image.findMany({
+    where: { status: ImageStatus.PENDING_UPLOAD, createdAt: { lt: cutoff } },
+    select: { id: true, storagePath: true },
+  })
+  if (stale.length === 0) return
+  await supabase.storage.from(STORAGE_BUCKET).remove(stale.map((r) => r.storagePath))
+  await db.image.deleteMany({ where: { id: { in: stale.map((r) => r.id) } } })
+}
+
+// POST /api/images/upload-url — issue a pre-signed upload URL + create PENDING record
+imagesRouter.post('/upload-url', async (req: express.Request, res: express.Response) => {
   try {
-    if (!req.file) {
-      res.status(400).json({ error: 'No file provided' })
+    const parsed = uploadUrlBodySchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.flatten() })
       return
     }
 
-    let buffer = req.file.buffer
-    const originalFilename = req.file.originalname
+    await cleanupStalePending()
 
-    // 1. Magic-byte format check — bail early, don't store invalid files
+    const { filename, mimeType } = parsed.data
+    const ext = MIME_TO_EXT[mimeType] ?? 'jpg'
+    const storagePath = `${randomUUID()}.${ext}`
+    const publicUrl = getPublicUrl(storagePath)
+
+    const [uploadUrl, image] = await Promise.all([
+      createSignedUploadUrl(storagePath),
+      db.image.create({
+        data: { filename, storagePath, publicUrl, status: ImageStatus.PENDING_UPLOAD },
+      }),
+    ])
+
+    res.status(201).json({ uploadUrl, storagePath, id: image.id })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('POST /api/images/upload-url error:', message)
+    res.status(500).json({ error: message })
+  }
+})
+
+// POST /api/images/:id/validate — download from storage, validate, update DB record
+imagesRouter.post('/:id/validate', async (req: express.Request, res: express.Response) => {
+  try {
+    const record = await db.image.findUnique({
+      where: { id: req.params.id as string, status: ImageStatus.PENDING_UPLOAD },
+    })
+    if (!record) {
+      res.status(404).json({ error: 'Upload record not found or already processed' })
+      return
+    }
+
+    // Download bytes — if the client never actually PUT to Supabase this will throw
+    let buffer: Buffer
+    try {
+      buffer = await downloadFromStorage(record.storagePath)
+    } catch {
+      await db.image.delete({ where: { id: record.id } })
+      res.status(400).json({ error: 'File not found in storage — upload may have failed' })
+      return
+    }
+
+    // 1. Magic-byte format check — bail early for invalid files
     const { reason: formatReason, mimeType: detectedMime } = await validateFormat(buffer)
     if (formatReason) {
+      await Promise.all([
+        deleteFromStorage(record.storagePath),
+        db.image.delete({ where: { id: record.id } }),
+      ])
       res.status(400).json({ error: 'Invalid file format', rejectionReasons: [formatReason] })
       return
     }
 
-    // 2. Convert HEIC → JPEG before any further processing
+    // 2. Convert HEIC → JPEG: re-upload as JPEG, delete original HEIC
     let mimeType = detectedMime
-    if (mimeType === 'image/heic') {
-      buffer = Buffer.from(
+    let storagePath = record.storagePath
+    let publicUrl = record.publicUrl
+
+    if (mimeType === 'image/heic' || mimeType === 'image/heif') {
+      const jpegBuffer = Buffer.from(
         await heicConvert({ buffer, format: 'JPEG', quality: 0.9 })
       )
+      const jpegPath = storagePath.replace(/\.(heic|heif)$/i, '.jpg')
+      await uploadToStorage(jpegBuffer, jpegPath, 'image/jpeg')
+      await deleteFromStorage(storagePath)
+      buffer = jpegBuffer
       mimeType = 'image/jpeg'
+      storagePath = jpegPath
+      publicUrl = getPublicUrl(jpegPath)
     }
 
-    // 3. Dimensions check (cheap, in-memory)
+    // 3. Dimensions check
     const { reason: sizeReason, width, height, fileSize } = await validateDimensions(buffer)
 
-    // 4. Upload to Supabase Storage (needed for preview even if rejected)
-    const ext = mimeType === 'image/jpeg' ? 'jpg' : 'png'
-    const storagePath = `${randomUUID()}.${ext}`
-    const publicUrl = await uploadToStorage(buffer, storagePath, mimeType)
+    // 4. Heavy checks (blur, duplicate, face detection) — serialised via pLimit(1)
+    const { reasons: heavyReasons, pHash } = await runValidations(buffer, width ?? 0, height ?? 0)
 
-    // 5. Run heavy checks in parallel (blur, pHash, face detection)
-    const { reasons: heavyReasons, pHash } = await runValidations(buffer, width, height)
-
-    // 6. Aggregate all rejection reasons
+    // 5. Aggregate + determine status
     const allReasons = [...(sizeReason ? [sizeReason] : []), ...heavyReasons]
     const status = allReasons.length === 0 ? ImageStatus.ACCEPTED : ImageStatus.REJECTED
 
-    // 7. Persist to DB
-    const image = await db.image.create({
+    // 6. Persist result (storage object kept regardless of status for preview)
+    const image = await db.image.update({
+      where: { id: record.id },
       data: {
-        filename: originalFilename,
         storagePath,
         publicUrl,
         status,
@@ -79,7 +150,7 @@ imagesRouter.post('/', upload.single('file'), async (req: express.Request, res: 
     res.status(201).json(image)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error('POST /api/images error:', message)
+    console.error('POST /api/images/:id/validate error:', message)
     res.status(500).json({ error: message })
   }
 })
@@ -96,9 +167,12 @@ imagesRouter.get('/', async (req: express.Request, res: express.Response) => {
     const { status, limit, cursor } = query.data
 
     const items = await db.image.findMany({
-      where: { ...(status ? { status } : {}) },
+      where: {
+        // When no status filter is applied, hide PENDING_UPLOAD rows from the UI
+        ...(status ? { status } : { status: { not: ImageStatus.PENDING_UPLOAD } }),
+      },
       orderBy: { createdAt: 'desc' },
-      take: limit + 1, // fetch one extra to determine if there's a next page
+      take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
         id: true,
@@ -124,7 +198,7 @@ imagesRouter.get('/', async (req: express.Request, res: express.Response) => {
   }
 })
 
-// DELETE /api/images/:id — remove DB row + Supabase object
+// DELETE /api/images/:id — remove DB row + Supabase object (works for any status)
 imagesRouter.delete('/:id', async (req: express.Request, res: express.Response) => {
   try {
     const image = await db.image.findUnique({

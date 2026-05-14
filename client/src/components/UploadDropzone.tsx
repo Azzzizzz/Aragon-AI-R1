@@ -1,11 +1,10 @@
 import { useCallback, useState } from 'react'
 import { useDropzone, type FileRejection } from 'react-dropzone'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Loader2, CloudUpload } from 'lucide-react'
 import { api } from '../lib/api'
 import { FileListItem, type UploadItem } from './FileListItem'
-import type { Image } from '../types'
 
 const ACCEPTED_TYPES = {
   'image/jpeg': ['.jpg', '.jpeg'],
@@ -20,33 +19,54 @@ function makeId() {
   return Math.random().toString(36).slice(2)
 }
 
+function setItemField(
+  prev: UploadItem[],
+  clientId: string,
+  patch: Partial<UploadItem>
+): UploadItem[] {
+  return prev.map((it) => (it.clientId === clientId ? { ...it, ...patch } : it))
+}
+
 export function UploadDropzone() {
   const queryClient = useQueryClient()
   const [items, setItems] = useState<UploadItem[]>([])
 
-  const isUploading = items.some((i) => i.status === 'uploading')
+  const isUploading = items.some(
+    (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
+  )
 
-  const mutation = useMutation({
-    mutationFn: (file: File) => api.postFile<Image>('/api/images', file),
-    onSuccess: (result, file) => {
-      setItems((prev) =>
-        prev.map((it) =>
-          it.file === file ? { ...it, status: 'success', result } : it,
-        ),
-      )
-      queryClient.invalidateQueries({ queryKey: ['images'] })
+  const processFile = useCallback(
+    async (file: File, clientId: string) => {
+      let pendingId: string | undefined
+
+      try {
+        // Step 1 — get pre-signed URL + create PENDING DB record
+        setItems((prev) => setItemField(prev, clientId, { status: 'requesting' }))
+        const { uploadUrl, id } = await api.requestUploadUrl(file.name, file.type)
+        pendingId = id
+        setItems((prev) => setItemField(prev, clientId, { status: 'uploading', pendingId: id }))
+
+        // Step 2 — PUT bytes directly to Supabase
+        await api.uploadDirect(uploadUrl, file)
+        setItems((prev) => setItemField(prev, clientId, { status: 'validating' }))
+
+        // Step 3 — ask server to validate
+        const result = await api.validateUpload(id)
+        setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
+        queryClient.invalidateQueries({ queryKey: ['images'] })
+      } catch (err) {
+        const message = (err as Error).message || 'Upload failed'
+        setItems((prev) => setItemField(prev, clientId, { status: 'error', error: message }))
+        toast.error(`${file.name}: ${message}`)
+
+        // Clean up PENDING DB row if we got an id before the failure
+        if (pendingId) {
+          api.cancelUpload(pendingId).catch(() => undefined)
+        }
+      }
     },
-    onError: (err, file) => {
-      setItems((prev) =>
-        prev.map((it) =>
-          it.file === file
-            ? { ...it, status: 'error', error: (err as Error).message }
-            : it,
-        ),
-      )
-      toast.error((err as Error).message || 'Upload failed')
-    },
-  })
+    [queryClient]
+  )
 
   const onDrop = useCallback(
     (accepted: File[], rejected: FileRejection[]) => {
@@ -60,13 +80,13 @@ export function UploadDropzone() {
       const newItems: UploadItem[] = accepted.map((file) => ({
         clientId: makeId(),
         file,
-        status: 'uploading',
+        status: 'requesting' as const,
       }))
 
       setItems((prev) => [...newItems, ...prev])
-      accepted.forEach((file) => mutation.mutate(file))
+      newItems.forEach(({ file, clientId }) => processFile(file, clientId))
     },
-    [mutation],
+    [processFile]
   )
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
