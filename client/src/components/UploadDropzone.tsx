@@ -119,7 +119,7 @@ export function UploadDropzone() {
           <p className="text-[10px] text-text-mute px-1">
             It can take up to 1 minute to upload
           </p>
-          <div className="max-h-60 overflow-y-auto overflow-x-hidden pr-1">
+          <div className="max-h-80 overflow-y-auto overflow-x-hidden pr-1">
             {items.map((item) => (
               <FileListItem key={item.clientId} item={item} />
             ))}
