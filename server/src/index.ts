@@ -1,10 +1,5 @@
+import './polyfill.js'
 import './config.js'
-import util from 'util'
-
-// Polyfill for Node 24 compatibility (imghash or other legacy libs)
-if (!(util as any).isNullOrUndefined) {
-  (util as any).isNullOrUndefined = (val: any) => val === null || val === undefined
-}
 import express from 'express'
 import cors from 'cors'
 import sharp from 'sharp'
