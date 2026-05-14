@@ -1,0 +1,8 @@
+node_modules
+dist
+.next
+.vercel
+package-lock.json
+*.log
+.env*
+prisma/migrations

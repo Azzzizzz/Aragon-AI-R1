@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Private planning space — AI working docs, never push
+.notes/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Prisma generated
+server/prisma/generated/
+
+# IDE
+.vscode/
+.idea/
+
+# Vite
+client/dist/
