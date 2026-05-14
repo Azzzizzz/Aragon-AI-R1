@@ -1,0 +1,21 @@
+// Prisma schema — fill in models after reading the spec at 10 AM
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// Add your models here. Example:
+// model Resource {
+//   id        String   @id @default(cuid())
+//   title     String
+//   filePath  String?
+//   createdAt DateTime @default(now())
+//   updatedAt DateTime @updatedAt
+// }

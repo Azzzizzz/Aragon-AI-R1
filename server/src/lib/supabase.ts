@@ -1,0 +1,11 @@
+import { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = process.env.SUPABASE_URL!
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY!
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in environment')
+}
+
+export const supabase = createClient(supabaseUrl, supabaseServiceKey)
+export const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'uploads'
