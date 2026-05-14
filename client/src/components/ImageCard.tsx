@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { rejectionMessages } from '../lib/rejectionMessages'
-import type { Image } from '../types'
+import type { Image, ImagesResponse } from '../types'
 
 export function ImageCard({ image, onDeleted }: { image: Image; onDeleted?: () => void }) {
   const queryClient = useQueryClient()
@@ -13,6 +13,14 @@ export function ImageCard({ image, onDeleted }: { image: Image; onDeleted?: () =
   const deleteMutation = useMutation({
     mutationFn: () => api.del(`/api/images/${image.id}`),
     onSuccess: () => {
+      // Remove from cache immediately so the card disappears without waiting for refetch
+      const drop = (key: unknown[]) =>
+        queryClient.setQueryData<ImagesResponse>(key, (old) =>
+          old ? { ...old, items: old.items.filter((i) => i.id !== image.id) } : old
+        )
+      drop(['images', 'ACCEPTED'])
+      drop(['images', 'REJECTED'])
+      // Background sync to keep server truth in cache
       queryClient.invalidateQueries({ queryKey: ['images'] })
       toast.success('Image deleted')
       onDeleted?.()
