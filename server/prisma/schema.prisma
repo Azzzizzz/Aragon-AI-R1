@@ -1,6 +1,3 @@
-// Prisma schema — fill in models after reading the spec at 10 AM
-// Docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,11 +8,37 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// Add your models here. Example:
-// model Resource {
-//   id        String   @id @default(cuid())
-//   title     String
-//   filePath  String?
-//   createdAt DateTime @default(now())
-//   updatedAt DateTime @updatedAt
-// }
+enum ImageStatus {
+  ACCEPTED
+  REJECTED
+}
+
+enum RejectionReason {
+  TOO_SMALL
+  INVALID_FORMAT
+  DUPLICATE
+  BLURRY
+  FACE_TOO_SMALL
+  MULTIPLE_FACES
+  NO_FACE
+}
+
+model Image {
+  id               String            @id @default(cuid())
+  filename         String
+  storagePath      String            @unique
+  publicUrl        String
+  status           ImageStatus
+  rejectionReasons RejectionReason[]
+  fileSize         Int
+  width            Int
+  height           Int
+  mimeType         String
+  pHash            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@index([pHash])
+}

@@ -17,15 +17,22 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "@supabase/supabase-js": "^2.105.4",
+    "@vladmandic/face-api": "^1.7.15",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "file-type": "^22.0.1",
+    "heic-convert": "^2.1.0",
+    "imghash": "^1.1.4",
+    "multer": "^2.1.1",
+    "sharp": "^0.34.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
     "@types/node": "^25.7.0",
     "eslint": "^10.3.0",
     "globals": "^17.6.0",
