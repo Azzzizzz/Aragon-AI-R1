@@ -71,7 +71,79 @@ imagesRouter.post('/upload-url', async (req: express.Request, res: express.Respo
   }
 })
 
-// POST /api/images/:id/validate — download from storage, validate, update DB record
+// Background validation pipeline — called fire-and-forget from POST /:id/validate
+async function runValidationPipeline(record: { id: string; storagePath: string; publicUrl: string }): Promise<void> {
+  // Download bytes — if client never PUT to Supabase this will throw
+  let buffer: Buffer
+  try {
+    buffer = await downloadFromStorage(record.storagePath)
+  } catch {
+    await db.image.delete({ where: { id: record.id } })
+    return
+  }
+
+  // 1. Magic-byte format check
+  const { reason: formatReason, mimeType: detectedMime } = await validateFormat(buffer)
+  if (formatReason) {
+    await Promise.all([
+      deleteFromStorage(record.storagePath),
+      db.image.delete({ where: { id: record.id } }),
+    ])
+    return
+  }
+
+  // 2. Convert HEIC → JPEG
+  let mimeType = detectedMime
+  let storagePath = record.storagePath
+  let publicUrl = record.publicUrl
+
+  if (mimeType === 'image/heic' || mimeType === 'image/heif') {
+    const jpegBuffer = Buffer.from(
+      await heicConvert({ buffer, format: 'JPEG', quality: 0.9 })
+    )
+    const jpegPath = storagePath.replace(/\.(heic|heif)$/i, '.jpg')
+    await uploadToStorage(jpegBuffer, jpegPath, 'image/jpeg')
+    await deleteFromStorage(storagePath)
+    buffer = jpegBuffer
+    mimeType = 'image/jpeg'
+    storagePath = jpegPath
+    publicUrl = getPublicUrl(jpegPath)
+  }
+
+  // 3. Dimensions
+  const { reason: sizeReason, width, height, fileSize } = await validateDimensions(buffer)
+
+  // 4. Blur + duplicate (parallel) then face detection (skipped if already rejected)
+  const { reasons: heavyReasons, pHash } = await runValidations(buffer, width ?? 0, height ?? 0)
+
+  // 5. Aggregate
+  const allReasons = [...(sizeReason ? [sizeReason] : []), ...heavyReasons]
+
+  // 5b. Duplicate: delete this copy, leave the original in place
+  if (allReasons.includes('DUPLICATE')) {
+    const original = await db.image.findFirst({
+      where: { pHash, id: { not: record.id } },
+      orderBy: { createdAt: 'asc' },
+    })
+    if (original) {
+      await Promise.all([
+        deleteFromStorage(record.storagePath),
+        db.image.delete({ where: { id: record.id } }),
+      ])
+      return
+    }
+  }
+
+  const status = allReasons.length === 0 ? ImageStatus.ACCEPTED : ImageStatus.REJECTED
+
+  // 6. Persist
+  await db.image.update({
+    where: { id: record.id },
+    data: { storagePath, publicUrl, status, rejectionReasons: allReasons, fileSize, width, height, mimeType, pHash },
+  })
+}
+
+// POST /api/images/:id/validate — kick off background validation, return immediately
 imagesRouter.post('/:id/validate', async (req: express.Request, res: express.Response) => {
   try {
     const record = await db.image.findUnique({
@@ -82,97 +154,37 @@ imagesRouter.post('/:id/validate', async (req: express.Request, res: express.Res
       return
     }
 
-    // Download bytes — if the client never actually PUT to Supabase this will throw
-    let buffer: Buffer
-    try {
-      buffer = await downloadFromStorage(record.storagePath)
-    } catch {
-      await db.image.delete({ where: { id: record.id } })
-      res.status(400).json({ error: 'File not found in storage — upload may have failed' })
-      return
-    }
-
-    // 1. Magic-byte format check — bail early for invalid files
-    const { reason: formatReason, mimeType: detectedMime } = await validateFormat(buffer)
-    if (formatReason) {
-      await Promise.all([
-        deleteFromStorage(record.storagePath),
-        db.image.delete({ where: { id: record.id } }),
-      ])
-      res.status(400).json({ error: 'Invalid file format', rejectionReasons: [formatReason] })
-      return
-    }
-
-    // 2. Convert HEIC → JPEG: re-upload as JPEG, delete original HEIC
-    let mimeType = detectedMime
-    let storagePath = record.storagePath
-    let publicUrl = record.publicUrl
-
-    if (mimeType === 'image/heic' || mimeType === 'image/heif') {
-      const jpegBuffer = Buffer.from(
-        await heicConvert({ buffer, format: 'JPEG', quality: 0.9 })
-      )
-      const jpegPath = storagePath.replace(/\.(heic|heif)$/i, '.jpg')
-      await uploadToStorage(jpegBuffer, jpegPath, 'image/jpeg')
-      await deleteFromStorage(storagePath)
-      buffer = jpegBuffer
-      mimeType = 'image/jpeg'
-      storagePath = jpegPath
-      publicUrl = getPublicUrl(jpegPath)
-    }
-
-    // 3. Dimensions check
-    const { reason: sizeReason, width, height, fileSize } = await validateDimensions(buffer)
-
-    // 4. Heavy checks (blur, duplicate, face detection) — serialised via pLimit(1)
-    const { reasons: heavyReasons, pHash } = await runValidations(buffer, width ?? 0, height ?? 0)
-
-    // 5. Aggregate + determine status
-    const allReasons = [...(sizeReason ? [sizeReason] : []), ...heavyReasons]
-    
-    // 5b. Special handling for DUPLICATES to prevent UI clutter
-    if (allReasons.includes('DUPLICATE')) {
-      // Find the original image that this is a duplicate of
-      const original = await db.image.findFirst({
-        where: { pHash, id: { not: record.id } },
-        orderBy: { createdAt: 'asc' }
-      })
-
-      if (original) {
-        // Clean up the redundant upload
-        await Promise.all([
-          deleteFromStorage(record.storagePath),
-          db.image.delete({ where: { id: record.id } }),
-        ])
-        // Return the original so the UI can highlight it or just ignore it
-        res.status(200).json({ ...original, isDuplicate: true })
-        return
-      }
-    }
-
-    const status = allReasons.length === 0 ? ImageStatus.ACCEPTED : ImageStatus.REJECTED
-
-    // 6. Persist result (storage object kept regardless of status for preview)
-    const image = await db.image.update({
-      where: { id: record.id },
-      data: {
-        storagePath,
-        publicUrl,
-        status,
-        rejectionReasons: allReasons,
-        fileSize,
-        width,
-        height,
-        mimeType,
-        pHash,
-      },
+    // Fire-and-forget — client polls GET /:id for the result
+    runValidationPipeline(record).catch((err) => {
+      console.error('Background validation error:', err instanceof Error ? err.message : String(err))
     })
 
-    res.status(201).json(image)
+    res.status(202).json({ id: record.id, status: ImageStatus.PENDING_UPLOAD })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('POST /api/images/:id/validate error:', message)
     res.status(500).json({ error: message })
+  }
+})
+
+// GET /api/images/:id — single image lookup used by the polling loop
+imagesRouter.get('/:id', async (req: express.Request, res: express.Response) => {
+  try {
+    const image = await db.image.findUnique({
+      where: { id: req.params.id as string },
+      select: {
+        id: true, filename: true, status: true, rejectionReasons: true,
+        publicUrl: true, width: true, height: true, fileSize: true, mimeType: true, createdAt: true,
+      },
+    })
+    if (!image) {
+      res.status(404).json({ error: 'Not found' })
+      return
+    }
+    res.json(image)
+  } catch (err) {
+    console.error('GET /api/images/:id error:', err)
+    res.status(500).json({ error: 'Failed to fetch image' })
   }
 })
 

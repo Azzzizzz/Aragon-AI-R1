@@ -50,20 +50,39 @@ export function UploadDropzone() {
         await api.uploadDirect(uploadUrl, file)
         setItems((prev) => setItemField(prev, clientId, { status: 'validating' }))
 
-        // Step 3 — ask server to validate
-        const result = (await api.validateUpload(id)) as any
-        
-        if (result.isDuplicate) {
-          setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
-          toast.info(`${file.name}: Already uploaded`)
-          // Auto-remove duplicates from the sidebar after 3 seconds to keep it clean
-          setTimeout(() => {
-            setItems((prev) => prev.filter(it => it.clientId !== clientId))
-          }, 3000)
-        } else {
-          setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
-          queryClient.invalidateQueries({ queryKey: ['images'] })
+        // Step 3 — kick off async validation (returns 202 immediately)
+        await api.validateUpload(id)
+
+        // Step 4 — poll GET /api/images/:id every 2s until status leaves PENDING_UPLOAD
+        const POLL_INTERVAL = 2000
+        const POLL_TIMEOUT = 120_000
+        const deadline = Date.now() + POLL_TIMEOUT
+
+        let result = null
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL))
+          const image = await api.getImage(id)
+
+          // null = 404 = duplicate was auto-deleted by the server
+          if (image === null) {
+            setItems((prev) => setItemField(prev, clientId, { status: 'success', result: null }))
+            toast.info(`${file.name}: Already uploaded`)
+            setTimeout(() => {
+              setItems((prev) => prev.filter((it) => it.clientId !== clientId))
+            }, 3000)
+            return
+          }
+
+          if (image.status !== 'PENDING_UPLOAD') {
+            result = image
+            break
+          }
         }
+
+        if (!result) throw new Error('Validation timed out — please try again')
+
+        setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
+        queryClient.invalidateQueries({ queryKey: ['images'] })
       } catch (err) {
         const message = (err as Error).message || 'Upload failed'
         setItems((prev) => setItemField(prev, clientId, { status: 'error', error: message }))

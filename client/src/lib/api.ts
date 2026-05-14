@@ -52,12 +52,22 @@ export const api = {
     if (!res.ok) throw new Error(`Direct upload failed: HTTP ${res.status}`)
   },
 
-  // Step 3: tell server to validate the uploaded file
+  // Step 3: tell server to start async validation — returns immediately (202)
   validateUpload: (id: string) =>
-    request<Image>(`/api/images/${id}/validate`, {
+    request<{ id: string; status: string }>(`/api/images/${id}/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     }),
+
+  // Poll a single image by id — returns null if 404 (duplicate auto-deleted)
+  getImage: async (id: string): Promise<Image | null> => {
+    const res = await fetch(`${BASE_URL}/api/images/${id}`, {
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  },
 
   // Cancel an in-flight upload — cleans up the PENDING DB row
   cancelUpload: (id: string) =>

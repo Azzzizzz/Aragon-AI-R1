@@ -19,23 +19,27 @@ export async function runValidations(
   height: number
 ): Promise<ValidationResult> {
   return limit(async () => {
-    // Run checks sequentially to keep peak memory low on 512MB instances
-    const blurReason = await validateBlur(buffer)
-    const duplicateResult = await validateDuplicate(buffer)
-    const faceReasons = await validateFace(buffer, width, height)
+    // Blur + duplicate run in parallel (both cheap: CPU hash + DB query)
+    const [blurReason, duplicateResult] = await Promise.all([
+      validateBlur(buffer),
+      validateDuplicate(buffer),
+    ])
 
-    const reasons = [
-      ...(blurReason ? [blurReason] : []),
-      ...(duplicateResult.reason ? [duplicateResult.reason] : []),
-      ...faceReasons
-    ]
-
-    // Manual GC trigger to clear RAM immediately after heavy processing
-    if (global.gc) {
-      console.log('🧹 Triggering manual garbage collection...')
-      global.gc()
+    // Skip face detection (expensive ~1.5s) if already rejected
+    if (blurReason || duplicateResult.reason) {
+      if (global.gc) global.gc()
+      return {
+        reasons: [
+          ...(blurReason ? [blurReason] : []),
+          ...(duplicateResult.reason ? [duplicateResult.reason] : []),
+        ],
+        pHash: duplicateResult.pHash,
+      }
     }
 
-    return { reasons, pHash: duplicateResult.pHash }
+    const faceReasons = await validateFace(buffer, width, height)
+
+    if (global.gc) global.gc()
+    return { reasons: faceReasons, pHash: duplicateResult.pHash }
   })
 }
