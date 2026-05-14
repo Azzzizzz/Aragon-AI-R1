@@ -1,7 +1,7 @@
 import sharp from 'sharp'
 import { RejectionReason } from '@prisma/client'
 
-const BLUR_THRESHOLD = 100  // Laplacian variance below this → blurry
+const BLUR_THRESHOLD = 200  // Laplacian variance below this → blurry
 
 export async function validateBlur(buffer: Buffer): Promise<RejectionReason | null> {
   // Resize first for speed (O(65k) vs O(millions) on a full-res image)
