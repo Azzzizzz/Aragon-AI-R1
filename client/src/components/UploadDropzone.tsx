@@ -97,11 +97,11 @@ export function UploadDropzone() {
   })
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col h-full overflow-hidden p-6 gap-3">
       <div
         {...getRootProps()}
         className={[
-          'flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed px-6 py-8 cursor-pointer transition-all duration-300 shadow-sm',
+          'flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed px-6 py-8 cursor-pointer transition-all duration-300 shadow-sm shrink-0',
           isDragActive
             ? 'border-accent bg-accent/10 scale-[1.02] shadow-accent/20 shadow-lg'
             : 'border-accent/30 hover:border-accent bg-surface hover:bg-accent/5 hover:shadow-md',
@@ -135,16 +135,16 @@ export function UploadDropzone() {
       </div>
 
       {items.length > 0 && (
-        <>
-          <p className="text-[10px] text-text-mute px-1">
+        <div className="flex flex-col flex-1 min-h-0">
+          <p className="text-[10px] text-text-mute px-1 mb-2">
             It can take up to 1 minute to upload
           </p>
-          <div className="max-h-80 overflow-y-auto overflow-x-hidden pr-1">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-1 pr-1 custom-scrollbar">
             {items.map((item) => (
               <FileListItem key={item.clientId} item={item} />
             ))}
           </div>
-        </>
+        </div>
       )}
     </div>
   )

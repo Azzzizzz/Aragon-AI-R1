@@ -89,31 +89,35 @@ export function UploadPage() {
   const isGreen = progressPct >= 80
 
   return (
-    <div className="flex flex-col md:flex-row min-h-screen bg-background transition-colors duration-300">
+    <div className="flex flex-col md:flex-row h-screen overflow-hidden bg-background transition-colors duration-300">
       {/* ── Left panel ── */}
-      <aside className="w-full md:w-80 md:shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-border md:overflow-y-auto p-6 gap-6 bg-surface-muted/50">
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <div className="badge-atlas py-1">
-              <div className="w-1 h-1 rounded-full bg-accent" />
-              Aragon AI
+      <aside className="w-full md:w-80 h-full md:shrink-0 flex flex-col border-b md:border-b-0 md:border-r border-border bg-surface-muted/50 overflow-hidden">
+        <div className="p-6 pb-0 flex flex-col gap-6">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="badge-atlas py-1">
+                <div className="w-1 h-1 rounded-full bg-accent" />
+                Aragon AI
+              </div>
+              <ThemeToggle />
             </div>
-            <ThemeToggle />
+            <h1 className="text-xl font-semibold text-text leading-tight">Upload photos</h1>
+            <p className="mt-2 text-sm text-text-dim leading-relaxed">
+              Now the fun begins! Select at least{' '}
+              <strong className="text-text font-semibold">6 of your best photos.</strong>{' '}
+              Uploading a mix of close-ups, selfies and mid-range shots can help the AI better
+              capture your face and body type.
+            </p>
           </div>
-          <h1 className="text-xl font-semibold text-text leading-tight">Upload photos</h1>
-          <p className="mt-2 text-sm text-text-dim leading-relaxed">
-            Now the fun begins! Select at least{' '}
-            <strong className="text-text font-semibold">6 of your best photos.</strong>{' '}
-            Uploading a mix of close-ups, selfies and mid-range shots can help the AI better
-            capture your face and body type.
-          </p>
         </div>
 
-        <UploadDropzone />
+        <div className="flex-1 min-h-0">
+          <UploadDropzone />
+        </div>
       </aside>
 
       {/* ── Right panel ── */}
-      <main className="flex-1 md:overflow-y-auto">
+      <main className="flex-1 h-full md:overflow-y-auto">
         {/* Progress bar — sticky on desktop */}
         <div className="md:sticky top-0 z-10 bg-background/90 backdrop-blur-sm border-b border-border py-4">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 flex items-center gap-3 sm:gap-4">
