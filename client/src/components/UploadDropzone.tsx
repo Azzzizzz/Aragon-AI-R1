@@ -81,10 +81,10 @@ export function UploadDropzone() {
       <div
         {...getRootProps()}
         className={[
-          'flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed px-6 py-8 cursor-pointer transition-all duration-200',
+          'flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed px-6 py-8 cursor-pointer transition-all duration-300 shadow-sm',
           isDragActive
-            ? 'border-accent bg-accent/5 scale-[1.01]'
-            : 'border-border hover:border-accent/40 hover:bg-accent/5',
+            ? 'border-accent bg-accent/10 scale-[1.02] shadow-accent/20 shadow-lg'
+            : 'border-accent/30 hover:border-accent bg-surface hover:bg-accent/5 hover:shadow-md',
         ].join(' ')}
       >
         <input {...getInputProps()} />
