@@ -17,6 +17,7 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "@supabase/supabase-js": "^2.105.4",
+    "@tensorflow/tfjs-node": "^4.22.0",
     "@vladmandic/face-api": "^1.7.15",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
