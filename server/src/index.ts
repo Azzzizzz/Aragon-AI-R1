@@ -13,7 +13,12 @@ sharp.concurrency(1)
 const app = express()
 const PORT = process.env.PORT || 3000
 
-app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }))
+// 2. Open CORS for technical assessment to prevent any browser-side blocking
+app.use(cors({ 
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}))
 app.use(express.json())
 
 app.get('/health', (_req: express.Request, res: express.Response) => {

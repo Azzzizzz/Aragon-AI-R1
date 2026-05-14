@@ -31,6 +31,12 @@ export async function runValidations(
       ...faceReasons
     ]
 
+    // Manual GC trigger to clear RAM immediately after heavy processing
+    if (global.gc) {
+      console.log('🧹 Triggering manual garbage collection...')
+      global.gc()
+    }
+
     return { reasons, pHash: duplicateResult.pHash }
   })
 }

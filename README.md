@@ -27,7 +27,7 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 | Image processing | sharp + heic-convert | Native libvips bindings, fast resize/greyscale/raw |
 | Face detection | @vladmandic/face-api + @tensorflow/tfjs-node | Self-contained, no external API key |
 | Perceptual hashing | Custom aHash (average hash) | 64-bit hash, Hamming-distance duplicate detection |
-| File upload | multer (memory storage) | In-process buffer, no temp-file cleanup |
+| File upload | Pre-signed URL (Supabase Storage) | Client uploads directly to storage; server never buffers bytes |
 | Deploy | Vercel (FE) + Railway (BE) | Git-connected, env vars UI |
 
 ---
@@ -45,31 +45,42 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 │  │  UploadDropzone   │   │  Progress bar (X of N)          │   │
 │  │  react-dropzone   │   │                                 │   │
 │  │  - accept filter  │   │  AcceptedGrid                   │   │
-│  │  - 120MB guard    │   │  useQuery(['images','ACCEPTED']) │   │
+│  │  - 15MB guard     │   │  useQuery(['images','ACCEPTED']) │   │
 │  │                   │   │                                 │   │
 │  │  FileListItem ×N  │   │  RejectedGrid                   │   │
-│  │  useMutation/file │   │  useQuery(['images','REJECTED']) │   │
-│  │  spinner → check  │   │  hover tooltip per reason       │   │
-│  └────────┬──────────┘   └─────────────────────────────────┘   │
-└───────────┼─────────────────────────────────────────────────────┘
-            │  multipart/form-data  (1 POST per file, in parallel)
-            ▼
+│  │  3-step sequence  │   │  useQuery(['images','REJECTED']) │   │
+│  │  Preparing →      │   │  hover tooltip per reason       │   │
+│  │  Uploading →      │   │                                 │   │
+│  │  Validating → Done│   │                                 │   │
+│  └──┬─────────────┬──┘   └─────────────────────────────────┘   │
+└─────┼─────────────┼───────────────────────────────────────────┘
+      │ Step 1+3    │ Step 2 (direct PUT, bypasses server)
+      ▼             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              EXPRESS SERVER  :3000  (Railway)                   │
 │                                                                 │
-│  POST /api/images                                               │
+│  POST /api/images/upload-url                                    │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │ 1. multer → buffer in memory (limit 120MB)              │   │
-│  │ 2. file-type magic bytes → bail 400 if not jpg/png/heic │   │
-│  │ 3. heic-convert → JPEG (if HEIC)                        │   │
-│  │ 4. sharp.metadata() → width, height                     │   │
-│  │ 5. supabase.storage.upload(uuid-path, buffer)           │   │
-│  │ 6. Promise.all:                                         │   │
+│  │ 1. Zod validate { filename, mimeType }                  │   │
+│  │ 2. Lazy cleanup of PENDING_UPLOAD rows older than 30min │   │
+│  │ 3. createSignedUploadUrl(storagePath, 300s)             │   │
+│  │ 4. prisma.image.create({ status: PENDING_UPLOAD })      │   │
+│  │ 5. return { uploadUrl, storagePath, id }                │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  POST /api/images/:id/validate                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ 1. findUnique({ status: PENDING_UPLOAD }) → 404 if gone │   │
+│  │ 2. downloadFromStorage(storagePath) → buffer            │   │
+│  │ 3. file-type magic bytes → bail 400 if not jpg/png/heic │   │
+│  │ 4. heic-convert → JPEG (if HEIC), re-upload, swap paths │   │
+│  │ 5. sharp.metadata() → width, height, fileSize           │   │
+│  │ 6. pLimit(1) → Promise.all:                             │   │
 │  │      ├─ Laplacian variance  (blur check)                │   │
 │  │      ├─ aHash 64-bit        (duplicate check vs DB)     │   │
 │  │      └─ face-api SSD v1     (count + box ratio)         │   │
 │  │ 7. Aggregate reasons[] → ACCEPTED | REJECTED            │   │
-│  │ 8. prisma.image.create(...)                             │   │
+│  │ 8. prisma.image.update({ status, reasons, dims, ... })  │   │
 │  │ 9. return 201 { id, status, rejectionReasons, ... }     │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
@@ -100,51 +111,57 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 User drops file(s)
       │
       ▼
-react-dropzone  ──── wrong MIME or >120MB? ──► toast error, abort
+react-dropzone  ──── wrong MIME or >15MB? ──► toast error, abort
       │ ok
       │
-      ▼  (one POST per file, fired in parallel)
-useMutation.mutate(file)
+      ▼  (one 3-step sequence per file, all files run in parallel)
+processFile(file)
       │
-      ├─ FileListItem shows spinner
+      ├─ FileListItem: "Preparing…"
+      │
+      ▼  STEP 1 ── POST /api/images/upload-url { filename, mimeType }
+      │           server: lazy orphan cleanup → createSignedUploadUrl → PENDING row
+      │           returns { uploadUrl, id }
+      │
+      ├─ FileListItem: "Uploading…"
+      │
+      ▼  STEP 2 ── PUT <bytes> directly to Supabase (server not involved)
+      │           browser → Supabase Storage
+      │           on failure: DELETE /api/images/:id to clean up PENDING row
+      │
+      ├─ FileListItem: "Validating…"
+      │
+      ▼  STEP 3 ── POST /api/images/:id/validate
       │
       ▼
-POST /api/images  (multipart/form-data, field: "file")
+downloadFromStorage(storagePath)    ← server fetches bytes from Supabase
       │
       ▼
-multer (memoryStorage, 120MB limit)
-      │  >120MB?
-      ├──────────► 413, toast "file too large"
-      │
-      ▼
-validateFormat(buffer)          ← file-type reads magic bytes
+validateFormat(buffer)              ← file-type reads magic bytes
       │  not jpg/png/heic?
-      ├──────────► 400, no storage write
+      ├──────────► 400, storage + DB row deleted, error toast
       │
       ▼
-HEIC? → heic-convert → JPEG buffer
+HEIC? → heic-convert → JPEG → re-upload as .jpg → delete HEIC original
       │
       ▼
-validateDimensions(buffer)      ← sharp.metadata()
+validateDimensions(buffer)          ← sharp.metadata()
       │  w<800 or h<800 or <50KB?
       ├──────────► TOO_SMALL added to reasons[]
       │
       ▼
-supabase.storage.upload(uuid-path, buffer)
-      │
-      ▼
-Promise.all([
-  validateBlur(buffer),         ← Laplacian variance on 256×256 greyscale
-  validateDuplicate(buffer),    ← aHash → Hamming vs last 1000 DB hashes
-  validateFace(buffer)          ← face-api SSD MobileNet v1
+pLimit(1) → Promise.all([
+  validateBlur(buffer),             ← Laplacian variance on 256×256 greyscale
+  validateDuplicate(buffer),        ← aHash → Hamming vs last 1000 DB hashes
+  validateFace(buffer)              ← face-api SSD MobileNet v1
 ])
       │
       ▼
 Aggregate reasons[] → status = reasons.length === 0 ? ACCEPTED : REJECTED
       │
       ▼
-prisma.image.create({ status, rejectionReasons, publicUrl, pHash, ... })
-      │
+prisma.image.update({ status, rejectionReasons, publicUrl, pHash, dims, ... })
+      │  storage object kept regardless — UI renders preview for rejected too
       ▼
 201 { id, status, rejectionReasons, publicUrl, width, height, ... }
       │
@@ -181,15 +198,45 @@ All responses are JSON. No envelopes — data returned directly. Errors: `{ "err
 
 ---
 
-### `POST /api/images`
+### `POST /api/images/upload-url`
 
-Upload and validate a single image file.
+Issue a pre-signed upload URL and create a `PENDING_UPLOAD` record.
 
-**Request:** `multipart/form-data`
+**Request:** `application/json`
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `file` | binary | yes | Image file. Max 120 MB. |
+| `filename` | string | yes | Original filename |
+| `mimeType` | string | yes | `image/jpeg` \| `image/png` \| `image/heic` \| `image/heif` |
+
+**Response `201`**
+```json
+{
+  "uploadUrl": "https://<project>.supabase.co/storage/v1/object/upload/sign/...",
+  "storagePath": "08af282f-1234-....png",
+  "id": "cmp57n2n40000pf2nlp4001cs"
+}
+```
+
+**Error responses**
+
+| Status | When |
+|---|---|
+| `400` | Zod validation failure (missing/invalid field) |
+| `500` | Supabase signed-URL generation failed |
+
+---
+
+### `PUT <uploadUrl>` — Direct to Supabase
+
+Client PUTs raw bytes directly to the signed URL. Server not involved.
+URL expires in **300 seconds**. Re-request `upload-url` if expired.
+
+---
+
+### `POST /api/images/:id/validate`
+
+Download from storage, validate, and update the DB record.
 
 **Response `201`**
 
@@ -215,9 +262,9 @@ Upload and validate a single image file.
 
 | Status | When |
 |---|---|
-| `400` | Invalid format / no file sent |
-| `413` | File exceeds 120 MB multer limit |
-| `500` | Storage or DB failure |
+| `400` | File not found in storage / invalid format |
+| `404` | Record not found or already validated |
+| `500` | Storage, conversion, or DB failure |
 
 ---
 
@@ -278,6 +325,7 @@ Delete image record from DB and file from Supabase Storage (both removed atomica
 
 ```prisma
 enum ImageStatus {
+  PENDING_UPLOAD                   // URL issued, client has not called validate yet
   ACCEPTED
   REJECTED
 }
@@ -297,12 +345,12 @@ model Image {
   filename         String
   storagePath      String            @unique        // UUID-based, no original filename
   publicUrl        String                           // Supabase CDN URL, served directly to <img>
-  status           ImageStatus
+  status           ImageStatus       @default(PENDING_UPLOAD)
   rejectionReasons RejectionReason[]               // array — multiple reasons allowed
-  fileSize         Int                              // bytes (post-HEIC-conversion)
-  width            Int
-  height           Int
-  mimeType         String                           // always jpeg/png after conversion
+  fileSize         Int?                             // nullable until validate runs
+  width            Int?
+  height           Int?
+  mimeType         String?                          // always jpeg/png after conversion
   pHash            String?                          // 16-char hex aHash for duplicate check
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
@@ -332,7 +380,7 @@ model Image {
 │       │   ├── AcceptedGrid.tsx    Accepted image grid (presentational)
 │       │   └── RejectedGrid.tsx    Rejected section with "Didn't Meet Guidelines"
 │       ├── lib/
-│       │   ├── api.ts              fetch wrappers: get, postFile, del
+│       │   ├── api.ts              requestUploadUrl, uploadDirect, validateUpload, del
 │       │   ├── rejectionMessages.ts enum → { label, tooltip }
 │       │   └── utils.ts            shadcn cn()
 │       ├── types.ts                Image, ImageStatus, RejectionReason, ImagesResponse
@@ -344,7 +392,7 @@ model Image {
     │   └── schema.prisma           Image model + enums + 3 indexes
     └── src/
         ├── routes/
-        │   └── images.ts           POST / GET / DELETE /api/images
+        │   └── images.ts           POST /upload-url, POST /:id/validate, GET /, DELETE /:id
         ├── validators/
         │   ├── format.ts           file-type magic-byte check
         │   ├── dimensions.ts       sharp metadata → width/height/size
@@ -369,7 +417,7 @@ model Image {
 |---|---|
 | Malicious file disguised by extension (e.g. `.exe` → `.jpg`) | `file-type` reads magic bytes from buffer — extension never trusted |
 | Path traversal via filename | Original filename never used in storage path; path is `<uuid>.<ext>` |
-| Memory exhaustion via huge upload | multer `limits: { fileSize: 120MB }` rejects at middleware, before full allocation |
+| Memory exhaustion via huge upload | Client enforced 15 MB limit in dropzone; server never buffers — bytes go direct to Supabase |
 | Service-role key exposure | Lives only in server `.env`, never sent to client. Bucket is public-read but writes require the key |
 | CORS abuse | `cors()` middleware with `origin: CLIENT_URL` — single trusted origin only |
 | SQL injection | Prisma parameterised queries; zero raw SQL |
@@ -381,9 +429,15 @@ model Image {
 
 ## Architecture Decisions
 
-### 1 — Proxy upload over presigned URL
+### 1 — Pre-signed URL over proxy upload
 
-Server is the only path that sees the raw bytes, so validation is atomic. One request, one response, no orphan files to clean up if validation fails. Presigned URL would require a separate cleanup job.
+Client uploads directly to Supabase Storage; the server never holds the raw bytes. This eliminates multer buffer stacking on the 512 MB Render instance — the root cause of recurring OOM crashes.
+
+**Pros:** Server RAM free during upload; uploads as fast as client → Supabase CDN edge; any number of concurrent uploads with zero server memory cost.
+
+**Cons:** Two-step client flow; orphan files possible if client crashes between upload and validate. Mitigated with `PENDING_UPLOAD` status + lazy 30-min TTL cleanup on every upload-url request. Server still downloads bytes once to validate, but under `pLimit(1)` — no stacking.
+
+The alternative (proxy upload) was the original design. It keeps validation atomic in one request, but the server must buffer the entire file in RAM alongside Sharp decode + TF.js inference — which reliably hits the 512 MB ceiling on larger images.
 
 ### 2 — Synchronous validation per file, parallel requests from client
 
@@ -416,7 +470,7 @@ Implemented inline with `sharp` (already a dependency) rather than adding `imgha
 | WebSockets / SSE | Per-file HTTP responses give equivalent real-time feedback at this scale |
 | pgvector similarity search | aHash + Hamming distance is sufficient for MVP duplicate detection |
 | Thumbnail resize / CDN transforms | Supabase serves originals; thumbnails are a production concern |
-| Retry / resumable uploads | Files ≤ 120 MB on stable connection; retry adds complexity |
+| Retry / resumable uploads | Files ≤ 15 MB on stable connection; retry adds complexity |
 | Rate limiting | Single-user demo scope |
 | PATCH /api/images/:id | `status` is server-determined — there's no field the user should edit |
 | Crop button on rejected cards | UI flourish from the spec screenshots; outside the core validation flow |
@@ -510,10 +564,10 @@ npm run dev
 ### Edge cases
 | # | Scenario | Expected |
 |---|---|---|
-| 14 | File > 120 MB | multer 413, toast "exceeds 120 MB limit" |
+| 14 | File > 15 MB | react-dropzone rejects before any request, toast "exceeds 15 MB limit" |
 | 15 | 0-byte file | 400, toast |
 | 16 | Corrupt JPEG (truncated) | sharp throws, 400, toast |
-| 17 | Network failure mid-upload | Mutation error, file shows ✗ in list, toast |
+| 17 | Network failure mid-upload | Step fails with error toast; client calls DELETE /:id to clean up PENDING row |
 | 18 | Delete accepted image | Removed from grid, file deleted from Supabase Storage |
 | 19 | Refresh page | In-flight uploads lost (expected — no resumable); completed images persist via GET |
 
@@ -528,7 +582,7 @@ Used AI to accelerate:
 - Component scaffolding and Tailwind class combinations
 
 Decided independently:
-- Proxy upload over presigned URL (debated trade-offs, chose atomicity)
+- Pre-signed URL upload (debated trade-offs, chose presigned to eliminate OOM on 512 MB instance)
 - Validator architecture (pure functions, `Promise.all` composition)
 - Single `Image` table with enum array over join table
 - Sync-per-file + parallel-client-requests as the "async" answer
