@@ -22,7 +22,8 @@ export async function detectFaces(
 
   try {
     const detections = await faceapi
-      .detectAllFaces(tensor as unknown as HTMLImageElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      // @ts-ignore - faceapi expects HTMLImageElement (browser) but we provide a Tensor (Node)
+      .detectAllFaces(tensor as any, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
       .run()
 
     if (detections.length === 0) return { count: 0, largestRatio: 0 }
