@@ -1,11 +1,9 @@
 import { useCallback } from 'react'
 import { useDropzone, type FileRejection } from 'react-dropzone'
-import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Loader2, CloudUpload } from 'lucide-react'
 import { api } from '../lib/api'
 import { FileListItem, type UploadItem } from './FileListItem'
-import type { Image, ImagesResponse } from '../types'
 
 const ACCEPTED_TYPES = {
   'image/jpeg': ['.jpg', '.jpeg'],
@@ -34,7 +32,6 @@ interface Props {
 }
 
 export function UploadDropzone({ items, setItems }: Props) {
-  const queryClient = useQueryClient()
   const isUploading = items.some(
     (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
   )
@@ -85,17 +82,7 @@ export function UploadDropzone({ items, setItems }: Props) {
 
         if (!result) throw new Error('Validation timed out — please try again')
 
-        if (result.status === 'ACCEPTED') {
-          // Keep slot in place — ImageCard renders in the same grid position
-          setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
-        } else {
-          // Move to the rejected section: inject into cache (no network call) then drop the slot
-          queryClient.setQueryData<ImagesResponse>(['images', 'REJECTED'], (old) => ({
-            items: [result as Image, ...(old?.items ?? [])],
-            nextCursor: old?.nextCursor ?? null,
-          }))
-          setItems((prev) => prev.filter((it) => it.clientId !== clientId))
-        }
+        setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
       } catch (err) {
         const message = (err as Error).message || 'Upload failed'
         setItems((prev) => setItemField(prev, clientId, { status: 'error', error: message }))
@@ -107,7 +94,7 @@ export function UploadDropzone({ items, setItems }: Props) {
         }
       }
     },
-    [queryClient]
+    []
   )
 
   const onDrop = useCallback(

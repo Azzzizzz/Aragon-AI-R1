@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import type { UploadItem } from '../components/FileListItem'
 import {
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   Users,
   Fingerprint,
   Minimize2,
+  Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { UploadDropzone } from '../components/UploadDropzone'
@@ -73,12 +75,64 @@ function Restriction({ icon, text }: { icon: React.ReactNode; text: string }) {
   )
 }
 
+function ConfirmDeleteModal({
+  open,
+  isDeleting,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean
+  isDeleting: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative w-full max-w-sm rounded-2xl bg-surface border border-border shadow-2xl p-6 flex flex-col gap-5">
+        <div className="flex flex-col gap-1.5">
+          <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-1">
+            <Trash2 className="w-5 h-5 text-red-400" />
+          </div>
+          <h2 className="text-base font-semibold text-text">Delete all images?</h2>
+          <p className="text-sm text-text-dim leading-relaxed">
+            This will permanently remove all uploaded photos. You'll need to start over.
+          </p>
+        </div>
+        <div className="flex gap-2.5">
+          <button
+            onClick={onCancel}
+            disabled={isDeleting}
+            className="flex-1 h-9 rounded-lg border border-border text-sm font-medium text-text hover:bg-surface-muted transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={isDeleting}
+            className="flex-1 h-9 rounded-lg bg-red-500 hover:bg-red-600 text-sm font-medium text-white transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {isDeleting ? (
+              <>
+                <span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                Deleting…
+              </>
+            ) : (
+              'Delete all'
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function UploadPage() {
   const [items, setItems] = useState<UploadItem[]>([])
-
-  const removeItem = useCallback((clientId: string) => {
-    setItems((prev) => prev.filter((i) => i.clientId !== clientId))
-  }, [])
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const queryClient = useQueryClient()
 
   const { data: acceptedData, isLoading: acceptedLoading } = useQuery({
     queryKey: ['images', 'ACCEPTED'],
@@ -89,16 +143,57 @@ export function UploadPage() {
     queryFn: () => api.get<ImagesResponse>('/api/images?status=REJECTED&limit=50'),
   })
 
-  // IDs that are already rendered in the SessionGrid — exclude from historical lists
+  const removeItem = useCallback((clientId: string) => {
+    setItems((prev) => prev.filter((i) => i.clientId !== clientId))
+  }, [])
+
+  const confirmDeleteAll = useCallback(async () => {
+    setIsDeleting(true)
+    try {
+      // Cancel any in-progress uploads
+      const inProgress = items.filter((i) => i.pendingId && i.status !== 'success' && i.status !== 'error')
+      await Promise.allSettled(inProgress.map((i) => api.cancelUpload(i.pendingId!)))
+
+      // Collect all completed image IDs (deduplicated)
+      const ids = new Set<string>([
+        ...(acceptedData?.items ?? []).map((i) => i.id),
+        ...(rejectedData?.items ?? []).map((i) => i.id),
+        ...items.filter((i) => i.result?.id).map((i) => i.result!.id),
+      ])
+      await Promise.allSettled([...ids].map((id) => api.del(`/api/images/${id}`)))
+
+      setItems([])
+      queryClient.setQueryData(['images', 'ACCEPTED'], { items: [], nextCursor: null })
+      queryClient.setQueryData(['images', 'REJECTED'], { items: [], nextCursor: null })
+      toast.success('All images deleted')
+      setShowDeleteModal(false)
+    } finally {
+      setIsDeleting(false)
+    }
+  }, [items, acceptedData, rejectedData, queryClient])
+
+  // IDs tracked in session — exclude from historical query lists to avoid duplicates
   const sessionImageIds = useMemo(
     () => new Set(items.flatMap((i) => [i.pendingId, i.result?.id]).filter(Boolean) as string[]),
     [items]
   )
 
-  const accepted = (acceptedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id))
-  const rejected = (rejectedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id))
+  // Session images that finished as REJECTED — shown in RejectedGrid, not SessionGrid
+  const sessionRejected = useMemo(
+    () => items.filter((i) => i.status === 'success' && i.result?.status === 'REJECTED').map((i) => i.result!),
+    [items]
+  )
 
-  const sessionCount = items.filter((i) => i.status !== 'error').length
+  const accepted = (acceptedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id))
+  const rejected = [
+    ...sessionRejected,
+    ...(rejectedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id)),
+  ]
+
+  // Exclude rejected items — they're already counted in rejected.length via sessionRejected
+  const sessionCount = items.filter(
+    (i) => i.status !== 'error' && i.result?.status !== 'REJECTED'
+  ).length
   const total = accepted.length + rejected.length + sessionCount
   const target = Math.max(total, 10)
   const progressPct = target === 0 ? 0 : Math.round(
@@ -155,6 +250,16 @@ export function UploadPage() {
               {accepted.length}{' '}
               <span className="text-text-mute">of {target}</span>
             </span>
+            {(total > 0 || items.length > 0) && (
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                disabled={isDeleting}
+                title="Delete all images"
+                className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-text-dim hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -221,6 +326,13 @@ export function UploadPage() {
           </div>
         </div>
       </main>
+
+      <ConfirmDeleteModal
+        open={showDeleteModal}
+        isDeleting={isDeleting}
+        onConfirm={confirmDeleteAll}
+        onCancel={() => setShowDeleteModal(false)}
+      />
     </div>
   )
 }

@@ -1,13 +1,43 @@
 import { useMemo, useEffect } from 'react'
-import { Loader2, XCircle } from 'lucide-react'
+import { XCircle } from 'lucide-react'
 import { ImageCard } from './ImageCard'
 import type { UploadItem } from './FileListItem'
 
-// Local preview + spinner — shown while upload/validation is in progress
+const STAGE_PCT: Record<string, number> = {
+  requesting: 20,
+  uploading: 55,
+  validating: 85,
+}
+
+function CircularProgress({ pct }: { pct: number }) {
+  const r = 22
+  const circ = 2 * Math.PI * r
+  return (
+    <svg width="56" height="56" viewBox="0 0 56 56" className="drop-shadow-sm">
+      {/* track */}
+      <circle cx="28" cy="28" r={r} fill="none" stroke="white" strokeOpacity={0.2} strokeWidth="3.5" />
+      {/* fill */}
+      <circle
+        cx="28" cy="28" r={r}
+        fill="none"
+        stroke="white"
+        strokeWidth="3.5"
+        strokeLinecap="round"
+        strokeDasharray={circ}
+        strokeDashoffset={circ * (1 - pct / 100)}
+        transform="rotate(-90 28 28)"
+        style={{ transition: 'stroke-dashoffset 0.7s ease' }}
+      />
+    </svg>
+  )
+}
+
+// Local preview + circular progress — shown while upload/validation is in progress
 function ProcessingCard({ item }: { item: UploadItem }) {
   const previewUrl = useMemo(() => URL.createObjectURL(item.file), [item.file])
   useEffect(() => () => URL.revokeObjectURL(previewUrl), [previewUrl])
 
+  const pct = STAGE_PCT[item.status] ?? 20
   const label =
     item.status === 'validating' ? 'Validating…'
     : item.status === 'uploading' ? 'Uploading…'
@@ -18,8 +48,8 @@ function ProcessingCard({ item }: { item: UploadItem }) {
       <div className="relative rounded-xl overflow-hidden aspect-square bg-surface border border-border">
         <img src={previewUrl} alt={item.file.name} className="w-full h-full object-cover" />
         <div className="absolute inset-0 bg-background/55 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
-          <Loader2 className="w-5 h-5 text-accent animate-spin" />
-          <span className="text-[11px] font-medium text-accent tracking-wide">{label}</span>
+          <CircularProgress pct={pct} />
+          <span className="text-[11px] font-medium text-white tracking-wide">{label}</span>
         </div>
       </div>
       <p className="text-xs text-center text-text-mute truncate px-1">{item.file.name}</p>
@@ -64,12 +94,12 @@ function SessionCard({
     return <ErrorCard item={item} />
   }
 
-  // success + real result (not a duplicate which has result=null)
-  if (item.status === 'success' && item.result) {
+  // success + accepted — keep in place
+  if (item.status === 'success' && item.result?.status === 'ACCEPTED') {
     return <ImageCard image={item.result} onDeleted={onDeleted} />
   }
 
-  // duplicate (result is null) — slot collapses after the 3s auto-remove
+  // rejected or duplicate — slot collapses (rejected moves to RejectedGrid via UploadPage)
   return null
 }
 
