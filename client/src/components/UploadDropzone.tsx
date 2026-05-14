@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Loader2, CloudUpload } from 'lucide-react'
 import { api } from '../lib/api'
 import { FileListItem, type UploadItem } from './FileListItem'
+import type { Image, ImagesResponse } from '../types'
 
 const ACCEPTED_TYPES = {
   'image/jpeg': ['.jpg', '.jpeg'],
@@ -85,7 +86,15 @@ export function UploadDropzone({ items, setItems }: Props) {
 
         if (!result) throw new Error('Validation timed out — please try again')
 
+        // Inject into the correct query cache immediately — no refetch gap
+        const cacheKey = ['images', result.status === 'ACCEPTED' ? 'ACCEPTED' : 'REJECTED']
+        queryClient.setQueryData<ImagesResponse>(cacheKey, (old) => ({
+          items: [result as Image, ...(old?.items ?? [])],
+          nextCursor: old?.nextCursor ?? null,
+        }))
+
         setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
+        // Background sync to keep server truth in cache
         queryClient.invalidateQueries({ queryKey: ['images'] })
       } catch (err) {
         const message = (err as Error).message || 'Upload failed'

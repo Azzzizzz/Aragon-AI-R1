@@ -6,7 +6,7 @@ import { api } from '../lib/api'
 import { rejectionMessages } from '../lib/rejectionMessages'
 import type { Image } from '../types'
 
-export function ImageCard({ image }: { image: Image }) {
+export function ImageCard({ image, onDeleted }: { image: Image; onDeleted?: () => void }) {
   const queryClient = useQueryClient()
   const [imgError, setImgError] = useState(false)
 
@@ -15,6 +15,7 @@ export function ImageCard({ image }: { image: Image }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['images'] })
       toast.success('Image deleted')
+      onDeleted?.()
     },
     onError: () => toast.error('Failed to delete image'),
   })

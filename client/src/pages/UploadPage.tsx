@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { UploadItem } from '../components/FileListItem'
 import {
@@ -20,7 +20,7 @@ import { api } from '../lib/api'
 import { UploadDropzone } from '../components/UploadDropzone'
 import { AcceptedGrid } from '../components/AcceptedGrid'
 import { RejectedGrid } from '../components/RejectedGrid'
-import { ProcessingGrid } from '../components/ProcessingGrid'
+import { SessionGrid } from '../components/SessionGrid'
 import { ThemeToggle } from '../components/ThemeToggle'
 import type { ImagesResponse } from '../types'
 
@@ -76,6 +76,10 @@ function Restriction({ icon, text }: { icon: React.ReactNode; text: string }) {
 export function UploadPage() {
   const [items, setItems] = useState<UploadItem[]>([])
 
+  const removeItem = useCallback((clientId: string) => {
+    setItems((prev) => prev.filter((i) => i.clientId !== clientId))
+  }, [])
+
   const { data: acceptedData, isLoading: acceptedLoading } = useQuery({
     queryKey: ['images', 'ACCEPTED'],
     queryFn: () => api.get<ImagesResponse>('/api/images?status=ACCEPTED&limit=50'),
@@ -85,15 +89,21 @@ export function UploadPage() {
     queryFn: () => api.get<ImagesResponse>('/api/images?status=REJECTED&limit=50'),
   })
 
-  const accepted = acceptedData?.items ?? []
-  const rejected = rejectedData?.items ?? []
-  const processingItems = items.filter(
-    (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
+  // IDs that are already rendered in the SessionGrid — exclude from historical lists
+  const sessionImageIds = useMemo(
+    () => new Set(items.flatMap((i) => [i.pendingId, i.result?.id]).filter(Boolean) as string[]),
+    [items]
   )
 
-  const total = accepted.length + rejected.length + processingItems.length
+  const accepted = (acceptedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id))
+  const rejected = (rejectedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id))
+
+  const sessionCount = items.filter((i) => i.status !== 'error').length
+  const total = accepted.length + rejected.length + sessionCount
   const target = Math.max(total, 10)
-  const progressPct = target === 0 ? 0 : Math.round((accepted.length / target) * 100)
+  const progressPct = target === 0 ? 0 : Math.round(
+    (accepted.length + items.filter((i) => i.result?.status === 'ACCEPTED').length) / target * 100
+  )
   const isGreen = progressPct >= 80
 
   return (
@@ -183,21 +193,21 @@ export function UploadPage() {
           </Collapsible>
 
           <div className="space-y-8 min-h-[400px]">
-            {/* In-flight images — appear immediately on upload, before validation */}
-            <ProcessingGrid items={processingItems} />
+            {/* Session uploads — all slots fixed in upload order, appearance changes in-place */}
+            <SessionGrid items={items} onItemDeleted={removeItem} />
 
-            {/* Accepted grid */}
+            {/* Historical accepted — images from before this session */}
             <AcceptedGrid images={accepted} isLoading={acceptedLoading} />
 
-            {/* Rejected section */}
+            {/* Historical rejected */}
             <RejectedGrid
               images={rejected}
               isLoading={rejectedLoading}
-              acceptedCount={accepted.length}
+              acceptedCount={accepted.length + items.filter((i) => i.result?.status === 'ACCEPTED').length}
             />
 
-            {/* Empty state — hide when anything is in flight */}
-            {!acceptedLoading && !rejectedLoading && total === 0 && processingItems.length === 0 && (
+            {/* Empty state */}
+            {!acceptedLoading && !rejectedLoading && total === 0 && items.length === 0 && (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-surface-muted flex items-center justify-center mb-4 border border-border">
                   <FileImage className="w-7 h-7 text-text-dim" />
