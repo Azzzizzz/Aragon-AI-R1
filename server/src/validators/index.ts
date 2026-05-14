@@ -11,7 +11,7 @@ export interface ValidationResult {
 }
 
 // Global limit to ensure only 2 images are processed by the entire server at a time.
-const limit = pLimit(2)
+const limit = pLimit(4)
 
 export async function runValidations(
   buffer: Buffer,
