@@ -21,10 +21,10 @@ export async function detectFaces(
   const tensor = tf.node.decodeImage(buffer, 3) as tf.Tensor3D
 
   try {
-    const detections = await faceapi
-      // @ts-ignore - faceapi expects HTMLImageElement (browser) but we provide a Tensor (Node)
-      .detectAllFaces(tensor as any, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
-      .run()
+    const detections = (await faceapi
+      // @ts-expect-error - faceapi expects HTMLImageElement (browser) but we provide a Tensor (Node)
+      .detectAllFaces(tensor as unknown as HTMLImageElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      .run()) as faceapi.FaceDetection[]
 
     if (detections.length === 0) return { count: 0, largestRatio: 0 }
 

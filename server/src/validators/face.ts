@@ -5,8 +5,8 @@ const MIN_FACE_RATIO = 0.05  // face must be ≥5% of image area
 
 export async function validateFace(
   buffer: Buffer,
-  width: number,
-  height: number
+  _width: number,
+  _height: number
 ): Promise<RejectionReason[]> {
   const { count, largestRatio } = await detectFaces(buffer)
   const reasons: RejectionReason[] = []

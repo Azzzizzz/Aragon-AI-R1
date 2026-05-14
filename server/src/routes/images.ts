@@ -2,7 +2,7 @@ import express from 'express'
 import multer from 'multer'
 import { randomUUID } from 'crypto'
 import { ImageStatus } from '@prisma/client'
-// @ts-ignore - heic-convert does not have type definitions
+// @ts-expect-error - heic-convert does not have type definitions
 import heicConvert from 'heic-convert'
 import { db } from '../db.js'
 import { uploadToStorage, deleteFromStorage } from '../lib/supabase.js'
@@ -19,7 +19,7 @@ const upload = multer({
 })
 
 // POST /api/images — upload + validate a single image
-imagesRouter.post('/', upload.single('file'), async (req: any, res: any) => {
+imagesRouter.post('/', upload.single('file'), async (req: express.Request, res: express.Response) => {
   try {
     if (!req.file) {
       res.status(400).json({ error: 'No file provided' })
@@ -84,7 +84,7 @@ imagesRouter.post('/', upload.single('file'), async (req: any, res: any) => {
 })
 
 // GET /api/images — list with optional status filter + cursor pagination
-imagesRouter.get('/', async (req: any, res: any) => {
+imagesRouter.get('/', async (req: express.Request, res: express.Response) => {
   try {
     const query = listImagesQuerySchema.safeParse(req.query)
     if (!query.success) {
@@ -124,7 +124,7 @@ imagesRouter.get('/', async (req: any, res: any) => {
 })
 
 // DELETE /api/images/:id — remove DB row + Supabase object
-imagesRouter.delete('/:id', async (req: any, res: any) => {
+imagesRouter.delete('/:id', async (req: express.Request, res: express.Response) => {
   try {
     const image = await db.image.findUnique({
       where: { id: req.params.id },
