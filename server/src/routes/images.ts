@@ -9,6 +9,7 @@ import {
   downloadFromStorage,
   uploadToStorage,
   deleteFromStorage,
+  deleteManyFromStorage,
   getPublicUrl,
   STORAGE_BUCKET,
 } from '../lib/supabase.js'
@@ -16,7 +17,7 @@ import { supabase } from '../lib/supabase.js'
 import { validateFormat } from '../validators/format.js'
 import { validateDimensions } from '../validators/dimensions.js'
 import { runValidations } from '../validators/index.js'
-import { listImagesQuerySchema, uploadUrlBodySchema } from '../schemas.js'
+import { listImagesQuerySchema, uploadUrlBodySchema, bulkDeleteBodySchema } from '../schemas.js'
 
 export const imagesRouter = express.Router()
 
@@ -229,6 +230,34 @@ imagesRouter.get('/', async (req: express.Request, res: express.Response) => {
   } catch (err) {
     console.error('GET /api/images error:', err)
     res.status(500).json({ error: 'Failed to fetch images' })
+  }
+})
+
+// DELETE /api/images — bulk delete: single DB query + single Supabase batch call
+imagesRouter.delete('/', async (req: express.Request, res: express.Response) => {
+  try {
+    const parsed = bulkDeleteBodySchema.safeParse(req.body)
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' })
+      return
+    }
+
+    const { ids } = parsed.data
+
+    const images = await db.image.findMany({
+      where: { id: { in: ids } },
+      select: { storagePath: true },
+    })
+
+    await Promise.all([
+      deleteManyFromStorage(images.map((i) => i.storagePath)),
+      db.image.deleteMany({ where: { id: { in: ids } } }),
+    ])
+
+    res.status(204).send()
+  } catch (err) {
+    console.error('DELETE /api/images error:', err)
+    res.status(500).json({ error: 'Bulk delete failed' })
   }
 })
 

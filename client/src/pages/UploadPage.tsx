@@ -155,12 +155,14 @@ export function UploadPage() {
       await Promise.allSettled(inProgress.map((i) => api.cancelUpload(i.pendingId!)))
 
       // Collect all completed image IDs (deduplicated)
-      const ids = new Set<string>([
-        ...(acceptedData?.items ?? []).map((i) => i.id),
-        ...(rejectedData?.items ?? []).map((i) => i.id),
-        ...items.filter((i) => i.result?.id).map((i) => i.result!.id),
-      ])
-      await Promise.allSettled([...ids].map((id) => api.del(`/api/images/${id}`)))
+      const ids = [
+        ...new Set<string>([
+          ...(acceptedData?.items ?? []).map((i) => i.id),
+          ...(rejectedData?.items ?? []).map((i) => i.id),
+          ...items.filter((i) => i.result?.id).map((i) => i.result!.id),
+        ])
+      ]
+      await api.delMany(ids)
 
       setItems([])
       queryClient.setQueryData(['images', 'ACCEPTED'], { items: [], nextCursor: null })

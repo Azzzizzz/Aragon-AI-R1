@@ -49,3 +49,9 @@ export async function deleteFromStorage(storagePath: string): Promise<void> {
   const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([storagePath])
   if (error) throw new Error(`Storage delete failed: ${error.message}`)
 }
+
+export async function deleteManyFromStorage(storagePaths: string[]): Promise<void> {
+  if (storagePaths.length === 0) return
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(storagePaths)
+  if (error) throw new Error(`Bulk storage delete failed: ${error.message}`)
+}

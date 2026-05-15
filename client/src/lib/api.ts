@@ -36,6 +36,17 @@ export const api = {
     if (!res.ok && res.status !== 404) throw new Error(`Delete failed: HTTP ${res.status}`)
   },
 
+  // Bulk delete: 1 request, 1 DB query, 1 Supabase batch call
+  delMany: async (ids: string[]): Promise<void> => {
+    if (ids.length === 0) return
+    const res = await fetch(`${BASE_URL}/api/images`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+    if (!res.ok) throw new Error(`Bulk delete failed: HTTP ${res.status}`)
+  },
+
   // Step 1: ask server for a pre-signed upload URL + create PENDING record
   requestUploadUrl: (filename: string, mimeType: string) =>
     request<UploadUrlResponse>('/api/images/upload-url', {
