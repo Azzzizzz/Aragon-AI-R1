@@ -30,7 +30,7 @@ export async function detectFaces(
   try {
     const detections = (await faceapi
       // @ts-expect-error - faceapi expects HTMLImageElement (browser) but we provide a Tensor (Node)
-      .detectAllFaces(tensor as unknown as HTMLImageElement, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 }))
+      .detectAllFaces(tensor as unknown as HTMLImageElement, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 }))
       .run()) as faceapi.FaceDetection[]
 
     if (detections.length === 0) return { count: 0, largestRatio: 0 }
