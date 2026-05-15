@@ -10,12 +10,6 @@ interface Props {
   isLoading: boolean
 }
 
-const cardVariants = {
-  initial: { opacity: 0, scale: 0.88 },
-  animate: { opacity: 1, scale: 1, transition: { duration: 0.25, ease: 'easeOut' } },
-  exit:    { opacity: 0, scale: 0.88, transition: { duration: 0.18, ease: 'easeIn' } },
-}
-
 export function AcceptedGrid({ images, sessionImages, onSessionImageDeleted, isLoading }: Props) {
   const sessionIds = new Set(sessionImages.map((i) => i.id))
   // Flatten into one list so a card transitioning from session→historical keeps the same key and stays mounted
@@ -55,7 +49,7 @@ export function AcceptedGrid({ images, sessionImages, onSessionImageDeleted, isL
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <AnimatePresence initial={false} mode="popLayout">
           {all.map((img) => (
-            <motion.div key={img.id} variants={cardVariants} initial="initial" animate="animate" exit="exit" layout>
+            <motion.div key={img.id} initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.88 }} transition={{ duration: 0.22, ease: 'easeOut' }} layout>
               <ImageCard
                 image={img}
                 onDeleted={sessionIds.has(img.id) ? () => onSessionImageDeleted(img.id) : undefined}

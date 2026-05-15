@@ -78,11 +78,6 @@ function ErrorCard({ item }: { item: UploadItem }) {
   )
 }
 
-const cardVariants = {
-  initial: { opacity: 0, scale: 0.88 },
-  animate: { opacity: 1, scale: 1, transition: { duration: 0.22, ease: 'easeOut' } },
-  exit:    { opacity: 0, scale: 0.88, transition: { duration: 0.18, ease: 'easeIn' } },
-}
 
 interface Props {
   items: UploadItem[]
@@ -119,7 +114,7 @@ export function SessionGrid({ items }: Props) {
             const isError = item.status === 'error'
             if (!isProcessing && !isError) return null
             return (
-              <motion.div key={item.clientId} variants={cardVariants} initial="initial" animate="animate" exit="exit" layout>
+              <motion.div key={item.clientId} initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.88 }} transition={{ duration: 0.2, ease: 'easeOut' }} layout>
                 {isProcessing ? <ProcessingCard item={item} /> : <ErrorCard item={item} />}
               </motion.div>
             )
