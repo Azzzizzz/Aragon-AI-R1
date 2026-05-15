@@ -1,9 +1,11 @@
 import { useCallback } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useDropzone, type FileRejection } from 'react-dropzone'
 import { toast } from 'sonner'
 import { Loader2, CloudUpload } from 'lucide-react'
 import { api } from '../lib/api'
 import { FileListItem, type UploadItem } from './FileListItem'
+import type { ImagesResponse } from '../types'
 
 const ACCEPTED_TYPES = {
   'image/jpeg': ['.jpg', '.jpeg'],
@@ -32,6 +34,7 @@ interface Props {
 }
 
 export function UploadDropzone({ items, setItems }: Props) {
+  const queryClient = useQueryClient()
   const isUploading = items.some(
     (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
   )
@@ -78,7 +81,16 @@ export function UploadDropzone({ items, setItems }: Props) {
 
         setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
 
-        // Card is now visible in the main grid — remove from sidebar after a short delay.
+        // Seed result into the query cache so AcceptedGrid/RejectedGrid show it
+        // immediately after the item is removed from session state below.
+        queryClient.setQueryData<ImagesResponse>(
+          ['images', result.status],
+          (old) => old
+            ? { ...old, items: [result, ...old.items] }
+            : { items: [result], nextCursor: null }
+        )
+
+        // Remove from sidebar — image is now in the cache so the grid won't flicker.
         // Errors are kept so the user can see which files failed (no card appears for them).
         setTimeout(() => {
           setItems((prev) => prev.filter((it) => it.clientId !== clientId))
@@ -90,7 +102,7 @@ export function UploadDropzone({ items, setItems }: Props) {
         api.cancelUpload(pendingId).catch(() => undefined)
       }
     },
-    []
+    [queryClient]
   )
 
   const onDrop = useCallback(
