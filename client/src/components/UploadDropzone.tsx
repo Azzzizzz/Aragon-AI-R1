@@ -83,6 +83,12 @@ export function UploadDropzone({ items, setItems }: Props) {
         if (!result) throw new Error('Validation timed out — please try again')
 
         setItems((prev) => setItemField(prev, clientId, { status: 'success', result }))
+
+        // Card is now visible in the main grid — remove from sidebar after a short delay.
+        // Errors are kept so the user can see which files failed (no card appears for them).
+        setTimeout(() => {
+          setItems((prev) => prev.filter((it) => it.clientId !== clientId))
+        }, 3000)
       } catch (err) {
         const message = (err as Error).message || 'Upload failed'
         setItems((prev) => setItemField(prev, clientId, { status: 'error', error: message }))
