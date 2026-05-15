@@ -35,22 +35,39 @@ function hammingDistance(h1: string, h2: string): number {
   return dist
 }
 
+// Tracks pHashes currently in validation — catches duplicates uploaded in the same batch
+// before either has been written to the DB. JS is single-threaded so has+add is atomic.
+const inFlight = new Set<string>()
+
 export async function validateDuplicate(
   buffer: Buffer
 ): Promise<{ reason: RejectionReason | null; pHash: string }> {
   const pHash = await generateHash(buffer)
 
-  // Check against latest 1000 images (sliding window for performance)
-  const existing = await db.image.findMany({
-    take: 1000,
-    orderBy: { createdAt: 'desc' },
-    select: { pHash: true },
-  })
+  // Check same-batch duplicates: exact match or near-duplicate among in-flight images
+  for (const h of inFlight) {
+    if (hammingDistance(h, pHash) <= HAMMING_THRESHOLD) {
+      return { reason: RejectionReason.DUPLICATE, pHash }
+    }
+  }
 
-  const isDuplicate = existing.some((img) => img.pHash && hammingDistance(img.pHash, pHash) <= HAMMING_THRESHOLD)
+  // Atomic in JS: no await between has() and add(), so two concurrent calls can't both pass
+  inFlight.add(pHash)
+  try {
+    // Check against latest 1000 images (sliding window for performance)
+    const existing = await db.image.findMany({
+      take: LOOKUP_LIMIT,
+      orderBy: { createdAt: 'desc' },
+      select: { pHash: true },
+    })
 
-  return {
-    reason: isDuplicate ? RejectionReason.DUPLICATE : null,
-    pHash,
+    const isDuplicate = existing.some((img) => img.pHash && hammingDistance(img.pHash, pHash) <= HAMMING_THRESHOLD)
+
+    return {
+      reason: isDuplicate ? RejectionReason.DUPLICATE : null,
+      pHash,
+    }
+  } finally {
+    inFlight.delete(pHash)
   }
 }
