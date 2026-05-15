@@ -92,7 +92,7 @@ function ConfirmDeleteModal({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} />
       <div className="relative w-full max-w-sm rounded-2xl bg-surface border border-border shadow-2xl p-6 flex flex-col gap-5">
         <div className="flex flex-col gap-1.5">
-          <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-1">
+          <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-1 self-center">
             <Trash2 className="w-5 h-5 text-red-400" />
           </div>
           <h2 className="text-base font-semibold text-text">Delete all images?</h2>
