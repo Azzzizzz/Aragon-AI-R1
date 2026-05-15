@@ -205,7 +205,7 @@ imagesRouter.get('/', async (req: express.Request, res: express.Response) => {
         // When no status filter is applied, hide PENDING_UPLOAD rows from the UI
         ...(status ? { status } : { status: { not: ImageStatus.PENDING_UPLOAD } }),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
