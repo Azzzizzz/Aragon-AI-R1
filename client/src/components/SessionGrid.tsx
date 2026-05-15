@@ -1,6 +1,5 @@
 import { useMemo, useEffect } from 'react'
-import { XCircle } from 'lucide-react'
-import { ImageCard } from './ImageCard'
+import { XCircle, Loader2 } from 'lucide-react'
 import type { UploadItem } from './FileListItem'
 
 const STAGE_PCT: Record<string, number> = {
@@ -79,47 +78,53 @@ function ErrorCard({ item }: { item: UploadItem }) {
 }
 
 // One slot in the unified grid — renders whichever card matches current state
-function SessionCard({
-  item,
-  onDeleted,
-}: {
-  item: UploadItem
-  onDeleted: () => void
-}) {
+function SessionCard({ item }: { item: UploadItem }) {
   if (item.status === 'requesting' || item.status === 'uploading' || item.status === 'validating') {
     return <ProcessingCard item={item} />
   }
-
   if (item.status === 'error') {
     return <ErrorCard item={item} />
   }
-
-  // success + accepted — keep in place
-  if (item.status === 'success' && item.result?.status === 'ACCEPTED') {
-    return <ImageCard image={item.result} onDeleted={onDeleted} />
-  }
-
-  // rejected or duplicate — slot collapses (rejected moves to RejectedGrid via UploadPage)
+  // success (accepted → AcceptedGrid, rejected → RejectedGrid) — collapse slot
   return null
 }
 
 interface Props {
   items: UploadItem[]
-  onItemDeleted: (clientId: string) => void
 }
 
-export function SessionGrid({ items, onItemDeleted }: Props) {
-  if (items.length === 0) return null
+export function SessionGrid({ items }: Props) {
+  const inProgress = items.filter(
+    (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
+  ).length
+  const hasVisible = inProgress > 0 || items.some((i) => i.status === 'error')
+
+  if (!hasVisible) return null
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-      {items.map((item) => (
-        <SessionCard
-          key={item.clientId}
-          item={item}
-          onDeleted={() => onItemDeleted(item.clientId)}
-        />
-      ))}
+    <div className="space-y-4">
+      <div className="pt-2 border-t border-border">
+        <div className="flex items-center gap-2 mb-1">
+          {inProgress > 0 ? (
+            <Loader2 className="w-4 h-4 text-accent animate-spin shrink-0" />
+          ) : (
+            <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+          )}
+          <h2 className="text-base font-semibold text-text">
+            {inProgress > 0 ? 'Uploading Photos' : 'Upload Errors'}
+          </h2>
+        </div>
+        <p className="text-sm text-text-dim">
+          {inProgress > 0
+            ? `Processing ${inProgress} photo${inProgress !== 1 ? 's' : ''}…`
+            : 'These photos failed to upload. Please try again.'}
+        </p>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {items.map((item) => (
+          <SessionCard key={item.clientId} item={item} />
+        ))}
+      </div>
     </div>
   )
 }

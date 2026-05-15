@@ -143,8 +143,8 @@ export function UploadPage() {
     queryFn: () => api.get<ImagesResponse>('/api/images?status=REJECTED&limit=50'),
   })
 
-  const removeItem = useCallback((clientId: string) => {
-    setItems((prev) => prev.filter((i) => i.clientId !== clientId))
+  const removeSessionImage = useCallback((imageId: string) => {
+    setItems((prev) => prev.filter((i) => i.result?.id !== imageId))
   }, [])
 
   const confirmDeleteAll = useCallback(async () => {
@@ -177,6 +177,11 @@ export function UploadPage() {
   // IDs tracked in session — exclude from historical query lists to avoid duplicates
   const sessionImageIds = useMemo(
     () => new Set(items.flatMap((i) => [i.pendingId, i.result?.id]).filter(Boolean) as string[]),
+    [items]
+  )
+
+  const sessionAccepted = useMemo(
+    () => items.filter((i) => i.status === 'success' && i.result?.status === 'ACCEPTED').map((i) => i.result!),
     [items]
   )
 
@@ -300,11 +305,16 @@ export function UploadPage() {
           </Collapsible>
 
           <div className="space-y-8 min-h-[400px]">
-            {/* Session uploads — all slots fixed in upload order, appearance changes in-place */}
-            <SessionGrid items={items} onItemDeleted={removeItem} />
+            {/* In-progress and errored uploads */}
+            <SessionGrid items={items} />
 
-            {/* Historical accepted — images from before this session */}
-            <AcceptedGrid images={accepted} isLoading={acceptedLoading} />
+            {/* Accepted — session + historical combined */}
+            <AcceptedGrid
+              images={accepted}
+              sessionImages={sessionAccepted}
+              onSessionImageDeleted={removeSessionImage}
+              isLoading={acceptedLoading}
+            />
 
             {/* Historical rejected */}
             <RejectedGrid
