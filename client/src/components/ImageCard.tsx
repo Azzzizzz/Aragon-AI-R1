@@ -9,24 +9,33 @@ import type { Image, ImagesResponse } from '../types'
 export function ImageCard({ image, onDeleted }: { image: Image; onDeleted?: () => void }) {
   const queryClient = useQueryClient()
   const [imgError, setImgError] = useState(false)
+  const [deleted, setDeleted] = useState(false)
 
   const deleteMutation = useMutation({
     mutationFn: () => api.del(`/api/images/${image.id}`),
+    onMutate: () => {
+      // Hide the card instantly — fires synchronously before the API call
+      setDeleted(true)
+    },
     onSuccess: () => {
-      // Remove from cache immediately so the card disappears without waiting for refetch
       const drop = (key: unknown[]) =>
         queryClient.setQueryData<ImagesResponse>(key, (old) =>
           old ? { ...old, items: old.items.filter((i) => i.id !== image.id) } : old
         )
       drop(['images', 'ACCEPTED'])
       drop(['images', 'REJECTED'])
-      // Background sync to keep server truth in cache
-      queryClient.invalidateQueries({ queryKey: ['images'] })
+      // Mark stale without an immediate refetch — avoids a race that restores the deleted item
+      queryClient.invalidateQueries({ queryKey: ['images'], refetchType: 'none' })
       toast.success('Image deleted')
       onDeleted?.()
     },
-    onError: () => toast.error('Failed to delete image'),
+    onError: () => {
+      setDeleted(false) // Restore the card so the user can retry
+      toast.error('Failed to delete image')
+    },
   })
+
+  if (deleted) return null
 
   const primaryReason = image.rejectionReasons[0]
   const reasonMsg = primaryReason ? rejectionMessages[primaryReason] : null
@@ -50,8 +59,7 @@ export function ImageCard({ image, onDeleted }: { image: Image; onDeleted?: () =
         {/* Delete button — always visible */}
         <button
           onClick={() => deleteMutation.mutate()}
-          disabled={deleteMutation.isPending}
-          className="absolute top-2 right-2 w-8 h-8 rounded-full bg-background/80 border border-border flex items-center justify-center text-text-dim hover:text-red-400 hover:border-red-500/40 hover:bg-background transition-colors disabled:opacity-50"
+          className="absolute top-2 right-2 w-8 h-8 rounded-full bg-background/80 border border-border flex items-center justify-center text-text-dim hover:text-red-400 hover:border-red-500/40 hover:bg-background transition-colors"
           title="Delete image"
         >
           <Trash2 className="w-3.5 h-3.5" />
