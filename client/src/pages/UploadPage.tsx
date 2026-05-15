@@ -249,7 +249,7 @@ export function UploadPage() {
               />
             </div>
             <span className="text-sm text-text-dim shrink-0 tabular-nums">
-              {accepted.length}{' '}
+              {accepted.length + items.filter((i) => i.result?.status === 'ACCEPTED').length}{' '}
               <span className="text-text-mute">of {target}</span>
             </span>
             {(total > 0 || items.length > 0) && (
