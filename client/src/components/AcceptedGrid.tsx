@@ -1,4 +1,5 @@
 import { CheckCircle } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { ImageCard } from './ImageCard'
 import type { Image } from '../types'
 
@@ -9,8 +10,16 @@ interface Props {
   isLoading: boolean
 }
 
+const cardVariants = {
+  initial: { opacity: 0, scale: 0.88 },
+  animate: { opacity: 1, scale: 1, transition: { duration: 0.25, ease: 'easeOut' } },
+  exit:    { opacity: 0, scale: 0.88, transition: { duration: 0.18, ease: 'easeIn' } },
+}
+
 export function AcceptedGrid({ images, sessionImages, onSessionImageDeleted, isLoading }: Props) {
-  const all = [...sessionImages, ...images]
+  const sessionIds = new Set(sessionImages.map((i) => i.id))
+  // Flatten into one list so a card transitioning from session→historical keeps the same key and stays mounted
+  const all = [...sessionImages, ...images.filter((i) => !sessionIds.has(i.id))]
 
   if (isLoading) {
     return (
@@ -44,12 +53,16 @@ export function AcceptedGrid({ images, sessionImages, onSessionImageDeleted, isL
         </p>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {sessionImages.map((img) => (
-          <ImageCard key={img.id} image={img} onDeleted={() => onSessionImageDeleted(img.id)} />
-        ))}
-        {images.map((img) => (
-          <ImageCard key={img.id} image={img} />
-        ))}
+        <AnimatePresence initial={false} mode="popLayout">
+          {all.map((img) => (
+            <motion.div key={img.id} variants={cardVariants} initial="initial" animate="animate" exit="exit" layout>
+              <ImageCard
+                image={img}
+                onDeleted={sessionIds.has(img.id) ? () => onSessionImageDeleted(img.id) : undefined}
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
     </div>
   )

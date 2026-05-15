@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { motion, AnimatePresence } from 'framer-motion'
 import type { UploadItem } from '../components/FileListItem'
 import {
   ChevronDown,
@@ -197,6 +198,12 @@ export function UploadPage() {
     ...(rejectedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id)),
   ]
 
+  const hasSessionContent = items.some(
+    (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating' || i.status === 'error'
+  )
+  const showAccepted = acceptedLoading || sessionAccepted.length > 0 || accepted.length > 0
+  const showRejected = rejected.length > 0
+
   // Exclude rejected items — they're already counted in rejected.length via sessionRejected
   const sessionCount = items.filter(
     (i) => i.status !== 'error' && i.result?.status !== 'REJECTED'
@@ -305,36 +312,70 @@ export function UploadPage() {
           </Collapsible>
 
           <div className="space-y-8 min-h-[400px]">
-            {/* In-progress and errored uploads */}
-            <SessionGrid items={items} />
+            <AnimatePresence mode="popLayout">
+              {hasSessionContent && (
+                <motion.div
+                  key="session-section"
+                  initial={{ opacity: 0, y: -12 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.25, ease: 'easeOut' } }}
+                  exit={{ opacity: 0, y: -12, transition: { duration: 0.2, ease: 'easeIn' } }}
+                  layout
+                >
+                  <SessionGrid items={items} />
+                </motion.div>
+              )}
 
-            {/* Accepted — session + historical combined */}
-            <AcceptedGrid
-              images={accepted}
-              sessionImages={sessionAccepted}
-              onSessionImageDeleted={removeSessionImage}
-              isLoading={acceptedLoading}
-            />
+              {showAccepted && (
+                <motion.div
+                  key="accepted-section"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' } }}
+                  exit={{ opacity: 0, transition: { duration: 0.2 } }}
+                  layout
+                >
+                  <AcceptedGrid
+                    images={accepted}
+                    sessionImages={sessionAccepted}
+                    onSessionImageDeleted={removeSessionImage}
+                    isLoading={acceptedLoading}
+                  />
+                </motion.div>
+              )}
 
-            {/* Historical rejected */}
-            <RejectedGrid
-              images={rejected}
-              isLoading={rejectedLoading}
-              acceptedCount={accepted.length + items.filter((i) => i.result?.status === 'ACCEPTED').length}
-            />
+              {showRejected && (
+                <motion.div
+                  key="rejected-section"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' } }}
+                  exit={{ opacity: 0, transition: { duration: 0.2 } }}
+                  layout
+                >
+                  <RejectedGrid
+                    images={rejected}
+                    isLoading={rejectedLoading}
+                    acceptedCount={accepted.length + items.filter((i) => i.result?.status === 'ACCEPTED').length}
+                  />
+                </motion.div>
+              )}
 
-            {/* Empty state */}
-            {!acceptedLoading && !rejectedLoading && total === 0 && items.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <div className="w-16 h-16 rounded-2xl bg-surface-muted flex items-center justify-center mb-4 border border-border">
-                  <FileImage className="w-7 h-7 text-text-dim" />
-                </div>
-                <p className="text-sm font-medium text-text">No images yet</p>
-                <p className="text-xs text-text-mute mt-1 max-w-xs mx-auto">
-                  Upload your best portrait photos above to get started
-                </p>
-              </div>
-            )}
+              {!acceptedLoading && !rejectedLoading && total === 0 && items.length === 0 && (
+                <motion.div
+                  key="empty-state"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1, transition: { duration: 0.3, delay: 0.1 } }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center justify-center py-20 text-center"
+                >
+                  <div className="w-16 h-16 rounded-2xl bg-surface-muted flex items-center justify-center mb-4 border border-border">
+                    <FileImage className="w-7 h-7 text-text-dim" />
+                  </div>
+                  <p className="text-sm font-medium text-text">No images yet</p>
+                  <p className="text-xs text-text-mute mt-1 max-w-xs mx-auto">
+                    Upload your best portrait photos above to get started
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </main>

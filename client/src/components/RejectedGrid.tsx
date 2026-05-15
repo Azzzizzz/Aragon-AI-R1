@@ -1,4 +1,5 @@
 import { AlertTriangle } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { ImageCard } from './ImageCard'
 import type { Image } from '../types'
 
@@ -28,9 +29,19 @@ export function RejectedGrid({ images, isLoading, acceptedCount }: Props) {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {images.map((img) => (
-          <ImageCard key={img.id} image={img} />
-        ))}
+        <AnimatePresence initial={false} mode="popLayout">
+          {images.map((img) => (
+            <motion.div
+              key={img.id}
+              initial={{ opacity: 0, scale: 0.88 }}
+              animate={{ opacity: 1, scale: 1, transition: { duration: 0.25, ease: 'easeOut' } }}
+              exit={{ opacity: 0, scale: 0.88, transition: { duration: 0.18, ease: 'easeIn' } }}
+              layout
+            >
+              <ImageCard image={img} />
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
     </div>
   )

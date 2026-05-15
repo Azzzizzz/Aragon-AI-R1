@@ -1,5 +1,6 @@
 import { useMemo, useEffect } from 'react'
 import { XCircle, Loader2 } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import type { UploadItem } from './FileListItem'
 
 const STAGE_PCT: Record<string, number> = {
@@ -77,16 +78,10 @@ function ErrorCard({ item }: { item: UploadItem }) {
   )
 }
 
-// One slot in the unified grid — renders whichever card matches current state
-function SessionCard({ item }: { item: UploadItem }) {
-  if (item.status === 'requesting' || item.status === 'uploading' || item.status === 'validating') {
-    return <ProcessingCard item={item} />
-  }
-  if (item.status === 'error') {
-    return <ErrorCard item={item} />
-  }
-  // success (accepted → AcceptedGrid, rejected → RejectedGrid) — collapse slot
-  return null
+const cardVariants = {
+  initial: { opacity: 0, scale: 0.88 },
+  animate: { opacity: 1, scale: 1, transition: { duration: 0.22, ease: 'easeOut' } },
+  exit:    { opacity: 0, scale: 0.88, transition: { duration: 0.18, ease: 'easeIn' } },
 }
 
 interface Props {
@@ -97,9 +92,6 @@ export function SessionGrid({ items }: Props) {
   const inProgress = items.filter(
     (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
   ).length
-  const hasVisible = inProgress > 0 || items.some((i) => i.status === 'error')
-
-  if (!hasVisible) return null
 
   return (
     <div className="space-y-4">
@@ -121,9 +113,18 @@ export function SessionGrid({ items }: Props) {
         </p>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {items.map((item) => (
-          <SessionCard key={item.clientId} item={item} />
-        ))}
+        <AnimatePresence mode="popLayout">
+          {items.map((item) => {
+            const isProcessing = item.status === 'requesting' || item.status === 'uploading' || item.status === 'validating'
+            const isError = item.status === 'error'
+            if (!isProcessing && !isError) return null
+            return (
+              <motion.div key={item.clientId} variants={cardVariants} initial="initial" animate="animate" exit="exit" layout>
+                {isProcessing ? <ProcessingCard item={item} /> : <ErrorCard item={item} />}
+              </motion.div>
+            )
+          })}
+        </AnimatePresence>
       </div>
     </div>
   )
