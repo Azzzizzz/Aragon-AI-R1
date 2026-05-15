@@ -36,25 +36,19 @@ export function UploadDropzone({ items, setItems }: Props) {
     (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating'
   )
 
+  // Handles upload + validation for a single file once its URL is known.
+  // Called in parallel — URL requests happen sequentially before this to preserve order.
   const processFile = useCallback(
-    async (file: File, clientId: string) => {
-      let pendingId: string | undefined
-
+    async (file: File, clientId: string, uploadUrl: string, pendingId: string) => {
       try {
-        // Step 1 — get pre-signed URL + create PENDING DB record
-        setItems((prev) => setItemField(prev, clientId, { status: 'requesting' }))
-        const { uploadUrl, id } = await api.requestUploadUrl(file.name, file.type)
-        pendingId = id
-        setItems((prev) => setItemField(prev, clientId, { status: 'uploading', pendingId: id }))
-
-        // Step 2 — PUT bytes directly to Supabase
+        // Step 1 — PUT bytes directly to Supabase
         await api.uploadDirect(uploadUrl, file)
         setItems((prev) => setItemField(prev, clientId, { status: 'validating' }))
 
-        // Step 3 — kick off async validation (returns 202 immediately)
-        await api.validateUpload(id)
+        // Step 2 — kick off async validation (returns 202 immediately)
+        await api.validateUpload(pendingId)
 
-        // Step 4 — poll GET /api/images/:id every 2s until status leaves PENDING_UPLOAD
+        // Step 3 — poll GET /api/images/:id every 2s until status leaves PENDING_UPLOAD
         const POLL_INTERVAL = 2000
         const POLL_TIMEOUT = 120_000
         const deadline = Date.now() + POLL_TIMEOUT
@@ -62,7 +56,7 @@ export function UploadDropzone({ items, setItems }: Props) {
         let result = null
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, POLL_INTERVAL))
-          const image = await api.getImage(id)
+          const image = await api.getImage(pendingId)
 
           // null = 404 = duplicate was auto-deleted by the server
           if (image === null) {
@@ -93,11 +87,7 @@ export function UploadDropzone({ items, setItems }: Props) {
         const message = (err as Error).message || 'Upload failed'
         setItems((prev) => setItemField(prev, clientId, { status: 'error', error: message }))
         toast.error(`${file.name}: ${message}`)
-
-        // Clean up PENDING DB row if we got an id before the failure
-        if (pendingId) {
-          api.cancelUpload(pendingId).catch(() => undefined)
-        }
+        api.cancelUpload(pendingId).catch(() => undefined)
       }
     },
     []
@@ -119,7 +109,22 @@ export function UploadDropzone({ items, setItems }: Props) {
       }))
 
       setItems((prev) => [...newItems, ...prev])
-      newItems.forEach(({ file, clientId }) => processFile(file, clientId))
+
+      // Upload-URL requests are sequential so the server assigns CUIDs in selection order.
+      // Each file's upload starts immediately once its URL arrives, so uploads run in parallel.
+      ;(async () => {
+        for (const { file, clientId } of newItems) {
+          try {
+            const { uploadUrl, id } = await api.requestUploadUrl(file.name, file.type)
+            setItems((prev) => setItemField(prev, clientId, { status: 'uploading', pendingId: id }))
+            processFile(file, clientId, uploadUrl, id) // fire-and-forget
+          } catch (err) {
+            const message = (err as Error).message || 'Upload failed'
+            setItems((prev) => setItemField(prev, clientId, { status: 'error', error: message }))
+            toast.error(`${file.name}: ${message}`)
+          }
+        }
+      })()
     },
     [processFile]
   )

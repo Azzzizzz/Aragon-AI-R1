@@ -3,7 +3,7 @@ import { RejectionReason } from '@prisma/client'
 import { db } from '../db.js'
 
 const HASH_SIZE = 8          // 8×8 = 64-bit hash
-const HAMMING_THRESHOLD = 10 // bits different → duplicate
+const HAMMING_THRESHOLD = 5  // bits different → duplicate (10 caused false positives on different group photos)
 const LOOKUP_LIMIT = 1000    // only compare against most recent N images
 
 // Average-hash (aHash): resize → greyscale → compare each pixel to mean
