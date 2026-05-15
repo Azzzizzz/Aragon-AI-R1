@@ -194,9 +194,9 @@ export function UploadPage() {
 
   const accepted = (acceptedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id))
   const rejected = [
-    ...sessionRejected,
     ...(rejectedData?.items ?? []).filter((img) => !sessionImageIds.has(img.id)),
-  ]
+    ...sessionRejected,
+  ].sort((a, b) => a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0)
 
   const hasSessionContent = items.some(
     (i) => i.status === 'requesting' || i.status === 'uploading' || i.status === 'validating' || i.status === 'error'
@@ -319,7 +319,6 @@ export function UploadPage() {
                   initial={{ opacity: 0, y: -12 }}
                   animate={{ opacity: 1, y: 0, transition: { duration: 0.25, ease: 'easeOut' } }}
                   exit={{ opacity: 0, y: -12, transition: { duration: 0.2, ease: 'easeIn' } }}
-                  layout
                 >
                   <SessionGrid items={items} />
                 </motion.div>
@@ -331,7 +330,7 @@ export function UploadPage() {
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' } }}
                   exit={{ opacity: 0, transition: { duration: 0.2 } }}
-                  layout
+                  layout="position"
                 >
                   <AcceptedGrid
                     images={accepted}
@@ -348,7 +347,7 @@ export function UploadPage() {
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' } }}
                   exit={{ opacity: 0, transition: { duration: 0.2 } }}
-                  layout
+                  layout="position"
                 >
                   <RejectedGrid
                     images={rejected}

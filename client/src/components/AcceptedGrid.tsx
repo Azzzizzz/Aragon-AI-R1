@@ -12,8 +12,9 @@ interface Props {
 
 export function AcceptedGrid({ images, sessionImages, onSessionImageDeleted, isLoading }: Props) {
   const sessionIds = new Set(sessionImages.map((i) => i.id))
-  // Flatten into one list so a card transitioning from session→historical keeps the same key and stays mounted
-  const all = [...sessionImages, ...images.filter((i) => !sessionIds.has(i.id))]
+  // Sort by createdAt ASC so order is stable regardless of processing completion order
+  const all = [...images.filter((i) => !sessionIds.has(i.id)), ...sessionImages]
+    .sort((a, b) => a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0)
 
   if (isLoading) {
     return (
@@ -47,9 +48,9 @@ export function AcceptedGrid({ images, sessionImages, onSessionImageDeleted, isL
         </p>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <AnimatePresence initial={false} mode="popLayout">
+        <AnimatePresence initial={false}>
           {all.map((img) => (
-            <motion.div key={img.id} initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.88 }} transition={{ duration: 0.22, ease: 'easeOut' }} layout>
+            <motion.div key={img.id} initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.22, ease: 'easeOut' }}>
               <ImageCard
                 image={img}
                 onDeleted={sessionIds.has(img.id) ? () => onSessionImageDeleted(img.id) : undefined}

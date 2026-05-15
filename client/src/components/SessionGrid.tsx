@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { XCircle, Loader2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { UploadItem } from './FileListItem'
@@ -34,8 +34,12 @@ function CircularProgress({ pct }: { pct: number }) {
 
 // Local preview + circular progress — shown while upload/validation is in progress
 function ProcessingCard({ item }: { item: UploadItem }) {
-  const previewUrl = useMemo(() => URL.createObjectURL(item.file), [item.file])
-  useEffect(() => () => URL.revokeObjectURL(previewUrl), [previewUrl])
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  useEffect(() => {
+    const url = URL.createObjectURL(item.file)
+    setPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [item.file])
 
   const pct = STAGE_PCT[item.status] ?? 20
   const label =
@@ -46,7 +50,7 @@ function ProcessingCard({ item }: { item: UploadItem }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="relative rounded-xl overflow-hidden aspect-square bg-surface border border-border">
-        <img src={previewUrl} alt={item.file.name} className="w-full h-full object-cover" />
+        {previewUrl && <img src={previewUrl} alt={item.file.name} className="w-full h-full object-cover" />}
         <div className="absolute inset-0 bg-background/55 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
           <CircularProgress pct={pct} />
           <span className="text-[11px] font-medium text-white tracking-wide">{label}</span>
@@ -59,13 +63,17 @@ function ProcessingCard({ item }: { item: UploadItem }) {
 
 // Error slot — keeps the grid position stable instead of collapsing it
 function ErrorCard({ item }: { item: UploadItem }) {
-  const previewUrl = useMemo(() => URL.createObjectURL(item.file), [item.file])
-  useEffect(() => () => URL.revokeObjectURL(previewUrl), [previewUrl])
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  useEffect(() => {
+    const url = URL.createObjectURL(item.file)
+    setPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [item.file])
 
   return (
     <div className="flex flex-col gap-1.5">
       <div className="relative rounded-xl overflow-hidden aspect-square bg-surface border border-red-500/40">
-        <img src={previewUrl} alt={item.file.name} className="w-full h-full object-cover opacity-30" />
+        {previewUrl && <img src={previewUrl} alt={item.file.name} className="w-full h-full object-cover opacity-30" />}
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-3">
           <XCircle className="w-5 h-5 text-red-400" />
           <span className="text-[11px] font-medium text-red-400 text-center leading-tight">
@@ -108,13 +116,13 @@ export function SessionGrid({ items }: Props) {
         </p>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <AnimatePresence mode="popLayout">
+        <AnimatePresence initial={false}>
           {items.map((item) => {
             const isProcessing = item.status === 'requesting' || item.status === 'uploading' || item.status === 'validating'
             const isError = item.status === 'error'
             if (!isProcessing && !isError) return null
             return (
-              <motion.div key={item.clientId} initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.88 }} transition={{ duration: 0.2, ease: 'easeOut' }} layout>
+              <motion.div key={item.clientId} initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.2, ease: 'easeOut' }}>
                 {isProcessing ? <ProcessingCard item={item} /> : <ErrorCard item={item} />}
               </motion.div>
             )

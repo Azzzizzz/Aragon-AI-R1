@@ -86,7 +86,7 @@ export function UploadDropzone({ items, setItems }: Props) {
         queryClient.setQueryData<ImagesResponse>(
           ['images', result.status],
           (old) => old
-            ? { ...old, items: [result, ...old.items] }
+            ? { ...old, items: [...old.items, result] }
             : { items: [result], nextCursor: null }
         )
 

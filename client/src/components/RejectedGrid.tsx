@@ -29,14 +29,12 @@ export function RejectedGrid({ images, isLoading, acceptedCount }: Props) {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <AnimatePresence initial={false} mode="popLayout">
+        <AnimatePresence initial={false}>
           {images.map((img) => (
             <motion.div
               key={img.id}
               initial={{ opacity: 0, scale: 0.88 }}
               animate={{ opacity: 1, scale: 1, transition: { duration: 0.25, ease: 'easeOut' } }}
-              exit={{ opacity: 0, scale: 0.88, transition: { duration: 0.18, ease: 'easeIn' } }}
-              layout
             >
               <ImageCard image={img} />
             </motion.div>
