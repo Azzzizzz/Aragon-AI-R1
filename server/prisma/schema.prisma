@@ -24,6 +24,23 @@ enum RejectionReason {
   NO_FACE
 }
 
+enum ProcessingStatus {
+  QUEUED
+  CONVERTING
+  COMPRESSING
+  GENERATING_VARIANTS
+  COMPLETE
+  FAILED
+}
+
+enum VariantType {
+  THUMBNAIL
+  MOBILE
+  TABLET
+  WEB
+  FULL
+}
+
 model Image {
   id               String            @id @default(cuid())
   filename         String
@@ -36,10 +53,32 @@ model Image {
   height           Int?
   mimeType         String?
   pHash            String?
+  processingStatus ProcessingStatus?
+  processingError  String?
+  compressionRatio Float?
+  compressedSize   Int?
+  variants         ImageVariant[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
   @@index([status])
   @@index([createdAt(sort: Desc)])
   @@index([pHash])
+  @@index([processingStatus])
+}
+
+model ImageVariant {
+  id          String      @id @default(cuid())
+  imageId     String
+  image       Image       @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  type        VariantType
+  storageUrl  String
+  storagePath String
+  width       Int
+  height      Int
+  fileSize    Int
+  createdAt   DateTime    @default(now())
+
+  @@unique([imageId, type])
+  @@index([imageId])
 }
