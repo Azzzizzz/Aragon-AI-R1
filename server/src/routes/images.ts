@@ -18,6 +18,7 @@ import { validateFormat } from '../validators/format.js'
 import { validateDimensions } from '../validators/dimensions.js'
 import { runValidations } from '../validators/index.js'
 import { listImagesQuerySchema, uploadUrlBodySchema, bulkDeleteBodySchema } from '../schemas.js'
+import { convertQueue } from '../lib/queue.js'
 
 export const imagesRouter = express.Router()
 
@@ -138,11 +139,24 @@ async function runValidationPipeline(record: { id: string; storagePath: string; 
 
   const status = allReasons.length === 0 ? ImageStatus.ACCEPTED : ImageStatus.REJECTED
 
-  // 6. Persist
+  // 6. Persist (set processingStatus=QUEUED only when ACCEPTED — REJECTED rows have null)
   await db.image.update({
     where: { id: record.id },
-    data: { storagePath, publicUrl, status, rejectionReasons: allReasons, fileSize, width, height, mimeType, pHash },
+    data: {
+      storagePath, publicUrl, status, rejectionReasons: allReasons,
+      fileSize, width, height, mimeType, pHash,
+      processingStatus: status === ImageStatus.ACCEPTED ? 'QUEUED' : null,
+    },
   })
+
+  // 7. Enqueue to the processing pipeline (jobId = imageId prevents duplicate jobs on re-validation)
+  if (status === ImageStatus.ACCEPTED) {
+    await convertQueue.add(
+      record.id,
+      { imageId: record.id, storagePath },
+      { jobId: record.id },
+    )
+  }
 }
 
 // POST /api/images/:id/validate — kick off background validation, return immediately
