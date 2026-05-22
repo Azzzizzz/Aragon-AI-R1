@@ -2,9 +2,10 @@
   "name": "project",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n client,server -c cyan,yellow \"npm run dev --prefix client\" \"npm run dev --prefix server\"",
+    "dev": "concurrently -n client,server,convert,compress,variants -c cyan,yellow,green,blue,magenta \"npm run dev --prefix client\" \"npm run dev --prefix server\" \"npm run dev:convert --prefix server\" \"npm run dev:compress --prefix server\" \"npm run dev:variants --prefix server\"",
     "dev:client": "npm run dev --prefix client",
     "dev:server": "npm run dev --prefix server",
+    "dev:workers": "concurrently -n convert,compress,variants -c green,blue,magenta \"npm run dev:convert --prefix server\" \"npm run dev:compress --prefix server\" \"npm run dev:variants --prefix server\"",
     "db:migrate": "npm run db:migrate --prefix server",
     "db:generate": "npm run db:generate --prefix server",
     "db:studio": "npm run db:studio --prefix server",
