@@ -183,6 +183,92 @@ imagesRouter.post('/:id/validate', async (req: express.Request, res: express.Res
   }
 })
 
+// GET /api/images/:id/status — pipeline status + variant URLs (polled by client after ACCEPTED)
+imagesRouter.get('/:id/status', async (req: express.Request, res: express.Response) => {
+  try {
+    const image = await db.image.findUnique({
+      where: { id: req.params.id as string },
+      select: {
+        processingStatus: true,
+        processingError: true,
+        compressionRatio: true,
+        compressedSize: true,
+        variants: {
+          select: { type: true, storageUrl: true, width: true, height: true, fileSize: true },
+        },
+      },
+    })
+    if (!image) {
+      res.status(404).json({ error: 'Not found' })
+      return
+    }
+    res.json(image)
+  } catch (err) {
+    console.error('GET /api/images/:id/status error:', err)
+    res.status(500).json({ error: 'Failed to fetch status' })
+  }
+})
+
+// POST /api/images/:id/reprocess — idempotent retry for FAILED jobs
+// Order: delete storage files → delete DB rows → reset state → re-enqueue
+// (prevents orphaned files; jobId=imageId deduplication makes double-clicks safe)
+imagesRouter.post('/:id/reprocess', async (req: express.Request, res: express.Response) => {
+  try {
+    const image = await db.image.findUnique({
+      where: { id: req.params.id as string },
+      select: { id: true, storagePath: true, processingStatus: true },
+    })
+    if (!image) {
+      res.status(404).json({ error: 'Not found' })
+      return
+    }
+    if (image.processingStatus !== 'FAILED') {
+      res.status(400).json({ message: 'Image is not in FAILED state' })
+      return
+    }
+
+    // 1. Delete all pipeline files (conventional paths — Supabase ignores missing files)
+    const pipelinePaths = [
+      `processed/${image.id}/converted.jpg`,
+      `processed/${image.id}/compressed.jpg`,
+      `processed/${image.id}/thumb.jpg`,
+      `processed/${image.id}/mobile.jpg`,
+      `processed/${image.id}/tablet.jpg`,
+      `processed/${image.id}/web.jpg`,
+    ]
+    await deleteManyFromStorage(pipelinePaths)
+
+    // 2. Delete ImageVariant rows
+    await db.imageVariant.deleteMany({ where: { imageId: image.id } })
+
+    // 3. Reset processing state
+    await db.image.update({
+      where: { id: image.id },
+      data: {
+        processingStatus: 'QUEUED',
+        processingError: null,
+        compressionRatio: null,
+        compressedSize: null,
+      },
+    })
+
+    // 4. Re-enqueue. BullMQ rejects new jobs sharing a jobId with any prior job
+    // (including failed/completed), so we explicitly remove the previous one first.
+    // jobId=imageId still gives us deduplication for double-clicked reprocess buttons.
+    await convertQueue.remove(image.id).catch(() => undefined)
+    await convertQueue.add(
+      image.id,
+      { imageId: image.id, storagePath: image.storagePath },
+      { jobId: image.id },
+    )
+
+    res.json({ enqueued: true })
+  } catch (err) {
+    console.error('POST /api/images/:id/reprocess error:', err)
+    res.status(500).json({ error: 'Reprocess failed' })
+  }
+})
+
 // GET /api/images/:id — single image lookup used by the polling loop
 imagesRouter.get('/:id', async (req: express.Request, res: express.Response) => {
   try {
