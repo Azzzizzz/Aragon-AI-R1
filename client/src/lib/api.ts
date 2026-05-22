@@ -1,4 +1,4 @@
-import type { Image } from '../types'
+import type { Image, ImageStatusResponse } from '../types'
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
@@ -86,6 +86,17 @@ export const api = {
   cancelUpload: (id: string) =>
     fetch(`${BASE_URL}/api/images/${id}`, {
       method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    }),
+
+  // Round 2: poll processing pipeline status (+ variant URLs once COMPLETE)
+  getImageStatus: (id: string) =>
+    request<ImageStatusResponse>(`/api/images/${id}/status`),
+
+  // Round 2: re-enqueue a FAILED job (idempotent at the BullMQ + DB layer)
+  reprocessImage: (id: string) =>
+    request<{ enqueued: true }>(`/api/images/${id}/reprocess`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     }),
 }

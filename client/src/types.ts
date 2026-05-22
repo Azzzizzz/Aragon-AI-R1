@@ -9,6 +9,32 @@ export type RejectionReason =
 
 export type ImageStatus = 'PENDING_UPLOAD' | 'ACCEPTED' | 'REJECTED'
 
+export type ProcessingStatus =
+  | 'QUEUED'
+  | 'CONVERTING'
+  | 'COMPRESSING'
+  | 'GENERATING_VARIANTS'
+  | 'COMPLETE'
+  | 'FAILED'
+
+export type VariantType = 'THUMBNAIL' | 'MOBILE' | 'TABLET' | 'WEB' | 'FULL'
+
+export interface ImageVariant {
+  type: VariantType
+  storageUrl: string
+  width: number
+  height: number
+  fileSize: number
+}
+
+export interface ImageStatusResponse {
+  processingStatus: ProcessingStatus | null
+  processingError: string | null
+  compressionRatio: number | null
+  compressedSize: number | null
+  variants: ImageVariant[]
+}
+
 export interface Image {
   id: string
   filename: string
