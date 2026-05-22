@@ -28,6 +28,8 @@ export interface ImageVariant {
 }
 
 export interface ImageStatusResponse {
+  status: ImageStatus
+  rejectionReasons: RejectionReason[]
   processingStatus: ProcessingStatus | null
   processingError: string | null
   compressionRatio: number | null

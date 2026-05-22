@@ -206,6 +206,8 @@ imagesRouter.get('/:id/status', async (req: express.Request, res: express.Respon
     const image = await db.image.findUnique({
       where: { id: req.params.id as string },
       select: {
+        status: true,
+        rejectionReasons: true,
         processingStatus: true,
         processingError: true,
         compressionRatio: true,
