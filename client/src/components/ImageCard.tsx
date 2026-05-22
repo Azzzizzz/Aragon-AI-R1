@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Trash2, Loader2, RefreshCw } from 'lucide-react'
+import { Trash2, Loader2, RefreshCw, Layers } from 'lucide-react'
 import { api } from '../lib/api'
 import { rejectionMessages } from '../lib/rejectionMessages'
 import type { Image, ImagesResponse, ImageStatusResponse, ProcessingStatus } from '../types'
@@ -19,6 +19,7 @@ export function ImageCard({ image, onDeleted }: { image: Image; onDeleted?: () =
   const queryClient = useQueryClient()
   const [imgError, setImgError] = useState(false)
   const [deleted, setDeleted] = useState(false)
+  const [showVariants, setShowVariants] = useState(false)
 
   // Poll pipeline status only for ACCEPTED images that haven't reached a terminal state.
   // Stops automatically once status is COMPLETE or FAILED.
@@ -152,6 +153,66 @@ export function ImageCard({ image, onDeleted }: { image: Image; onDeleted?: () =
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>
+
+        {/* View Variants button — only when COMPLETE */}
+        {isPipelineComplete && (
+          <button
+            onClick={() => setShowVariants(true)}
+            className="absolute top-2 left-2 px-2 py-1 rounded-md bg-background/80 border border-border flex items-center gap-1 text-[10px] font-medium text-text-dim hover:text-accent hover:border-accent/40 hover:bg-background transition-colors"
+            title="View generated variants and metadata"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Sizes</span>
+          </button>
+        )}
+
+        {/* Variants details overlay */}
+        {showVariants && (
+          <div className="absolute inset-0 bg-background/95 backdrop-blur-[4px] flex flex-col p-3 z-10 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-2 pb-1.5 border-b border-border">
+              <span className="text-[11px] font-semibold text-text uppercase tracking-wider">Image Variants</span>
+              <button
+                onClick={() => setShowVariants(false)}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-surface hover:bg-surface-hover text-text-dim hover:text-text transition-colors"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2 pr-0.5 scrollbar-thin">
+              {pipeline?.variants.map((v) => (
+                <div key={v.type} className="flex flex-col bg-surface/50 border border-border/60 rounded-md p-1.5 text-[11px]">
+                  <div className="flex justify-between items-center font-medium text-text mb-0.5">
+                    <span className="uppercase text-[9px] px-1 rounded bg-accent/10 text-accent font-semibold">{v.type}</span>
+                    <span className="text-text-dim text-[10px]">{v.width} × {v.height}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-[10px] text-text-dim">
+                    <span>{(v.fileSize / 1024).toFixed(1)} KB</span>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(v.storageUrl)
+                          toast.success(`${v.type} URL copied!`)
+                        }}
+                        className="hover:text-accent transition-colors underline decoration-dotted"
+                      >
+                        Copy URL
+                      </button>
+                      <span>•</span>
+                      <a
+                        href={v.storageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="hover:text-accent transition-colors underline decoration-dotted"
+                      >
+                        Open
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Hover tooltip for rejected images */}
         {reasonMsg && (

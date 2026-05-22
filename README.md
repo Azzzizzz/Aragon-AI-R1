@@ -175,25 +175,27 @@ ROUND 1 — SYNCHRONOUS, REQUEST-SCOPED
 
 ---
 
-### Round 2 — Queue-Decoupled Pipeline
+### Round 2 — Async/Non-Blocking Pipeline
 
-The server becomes thin: validate, accept, **enqueue, return 202**. All heavy work moves to three independent worker processes connected to the same Redis queue.
+The server returns a **202 Accepted** in ~50ms, immediately freeing up the client. However, in this implementation, the validation pipeline still executes **asynchronously, in-process on the Express server**. Once an image successfully passes validation, it is enqueued to the convert queue.
+
+> [!WARNING]
+> **Process-level Resource Bottleneck**: Because the validation pipeline (magic bytes, HEIC conversion, blur detection, average hashing, TinyFaceDetector face-api pass) runs inside the Express process, a massive burst of concurrent uploads (e.g. 50+ concurrent requests) still risks spike CPU/RAM OOM errors on a 512MB Render instance. The HTTP response is decoupled and non-blocking, but the resources are not yet decoupled from the API process. In an enterprise system, this validation step should also be moved to a dedicated BullMQ queue (`aragon:validate`) and validation worker.
 
 ```
-ROUND 2 — ASYNC, QUEUE-DECOUPLED PIPELINE
+ROUND 2 — ASYNC, DECOUPLED PIPELINE (WITH IN-PROCESS VALIDATION)
 ══════════════════════════════════════════════════════════════════════
 
   Browser  Browser  Browser  Browser  Browser
     │        │        │        │        │
-    │     POST /validate  →  returns 202 in ~50ms (just enqueues)
+    │     POST /validate  →  returns 202 in ~50ms (HTTP non-blocking)
     ▼        ▼        ▼        ▼        ▼
- ╔═══════════════════════════════════════════════════╗
- ║         EXPRESS SERVER  (thin — enqueues only)    ║
- ║  validate → ACCEPTED → processingStatus=QUEUED    ║
- ║  → convertQueue.add(imageId, storagePath)         ║
- ║  → return 202                                     ║
- ║  [ never OOMs on validation work alone ]          ║
- ╚═══════════════════════════════════════════════════╝
+ ╔═══════════════════════════════════════════════════════════╗
+ ║               EXPRESS SERVER (single process)             ║
+ ║  • runValidationPipeline() [async in-process background]  ║
+ ║  • if ACCEPTED ──► convertQueue.add(imageId, storagePath) ║
+ ║  [ Reduces HTTP block, but server still does heavy FE ]   ║
+ ╚═══════════════════════════════════════════════════════════╝
                        │
                        │  job: { imageId, storagePath }
                        ▼
@@ -912,8 +914,8 @@ Implemented inline with `sharp` (already a dependency) rather than adding `imgha
 
 | Priority | Feature | Why |
 |---|---|---|
-| 1 | **BullMQ + Redis job queue** | Decouple upload receipt from processing; handle spikes; retry failed validations |
-| 2 | **Server-Sent Events (SSE)** | Push validation results to client instead of polling; better UX at scale |
+| 1 | **Validation Offloading Queue** | Completely decouple image validation (magic-byte check, HEIC convert, blur/duplicate detection, face detection) from the Express process by introducing a 4th queue (`aragon:validate`) and a background validation worker. This fully eliminates Express server OOM risks. |
+| 2 | **Server-Sent Events (SSE)** | Push validation results and pipeline status to client instead of polling; better UX and lower database request rates at scale |
 | 3 | **Auth (Supabase Auth)** | Row-level security so users only see their own images |
 | 4 | **pgvector embeddings** | Replace aHash with CLIP embeddings for semantically-aware duplicate detection |
 | 5 | **Supabase image transforms** | On-the-fly thumbnails + WebP for grid performance |
