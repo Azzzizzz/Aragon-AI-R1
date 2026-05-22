@@ -29,6 +29,20 @@ const MIME_TO_EXT: Record<string, string> = {
   'image/heif': 'heif',
 }
 
+// All possible pipeline output paths for an image. Supabase silently
+// ignores entries that don't exist, so this is safe for REJECTED images
+// (which never entered the pipeline) too.
+function pipelinePathsFor(imageId: string): string[] {
+  return [
+    `processed/${imageId}/converted.jpg`,
+    `processed/${imageId}/compressed.jpg`,
+    `processed/${imageId}/thumb.jpg`,
+    `processed/${imageId}/mobile.jpg`,
+    `processed/${imageId}/tablet.jpg`,
+    `processed/${imageId}/web.jpg`,
+  ]
+}
+
 // Lazily delete PENDING_UPLOAD rows (+ their storage objects) older than 30 min.
 // Called at the start of every upload-url request to self-heal without a cron job.
 async function cleanupStalePending(): Promise<void> {
@@ -227,16 +241,8 @@ imagesRouter.post('/:id/reprocess', async (req: express.Request, res: express.Re
       return
     }
 
-    // 1. Delete all pipeline files (conventional paths — Supabase ignores missing files)
-    const pipelinePaths = [
-      `processed/${image.id}/converted.jpg`,
-      `processed/${image.id}/compressed.jpg`,
-      `processed/${image.id}/thumb.jpg`,
-      `processed/${image.id}/mobile.jpg`,
-      `processed/${image.id}/tablet.jpg`,
-      `processed/${image.id}/web.jpg`,
-    ]
-    await deleteManyFromStorage(pipelinePaths)
+    // 1. Delete all pipeline files (Supabase silently ignores missing entries)
+    await deleteManyFromStorage(pipelinePathsFor(image.id))
 
     // 2. Delete ImageVariant rows
     await db.imageVariant.deleteMany({ where: { imageId: image.id } })
@@ -346,11 +352,17 @@ imagesRouter.delete('/', async (req: express.Request, res: express.Response) => 
 
     const images = await db.image.findMany({
       where: { id: { in: ids } },
-      select: { storagePath: true },
+      select: { id: true, storagePath: true },
     })
 
+    // Originals + every possible pipeline file for each image, in one Supabase batch
+    const allPaths = [
+      ...images.map((i) => i.storagePath),
+      ...images.flatMap((i) => pipelinePathsFor(i.id)),
+    ]
+
     await Promise.all([
-      deleteManyFromStorage(images.map((i) => i.storagePath)),
+      deleteManyFromStorage(allPaths),
       db.image.deleteMany({ where: { id: { in: ids } } }),
     ])
 
@@ -366,7 +378,7 @@ imagesRouter.delete('/:id', async (req: express.Request, res: express.Response) 
   try {
     const image = await db.image.findUnique({
       where: { id: req.params.id as string },
-      select: { storagePath: true },
+      select: { id: true, storagePath: true },
     })
 
     if (!image) {
@@ -374,8 +386,11 @@ imagesRouter.delete('/:id', async (req: express.Request, res: express.Response) 
       return
     }
 
+    // Original + every possible pipeline file (REJECTED images simply have none of the latter)
+    const allPaths = [image.storagePath, ...pipelinePathsFor(image.id)]
+
     await Promise.all([
-      deleteFromStorage(image.storagePath),
+      deleteManyFromStorage(allPaths),
       db.image.delete({ where: { id: req.params.id as string } }),
     ])
 
