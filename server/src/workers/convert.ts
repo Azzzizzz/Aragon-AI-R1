@@ -22,6 +22,8 @@ sharp.concurrency(1)
 
 async function processJob(job: Job<ConvertJobData>): Promise<void> {
   const { imageId, storagePath } = job.data
+  const t0 = Date.now()
+  console.log(`[convert] ${imageId} → picked up`)
 
   // Mark stage start (overwrites FAILED on retry — keeps DB in sync with worker reality)
   const updated = await db.image.updateMany({
@@ -29,7 +31,7 @@ async function processJob(job: Job<ConvertJobData>): Promise<void> {
     data: { processingStatus: 'CONVERTING', processingError: null },
   })
   if (updated.count === 0) {
-    // Image was deleted while job was queued — nothing to do
+    console.log(`[convert] ${imageId} → image was deleted, skipping`)
     return
   }
 
@@ -51,6 +53,8 @@ async function processJob(job: Job<ConvertJobData>): Promise<void> {
     { imageId, convertedPath },
     { jobId: imageId },
   )
+
+  console.log(`[convert] ${imageId} ✓ done in ${Date.now() - t0}ms → compress`)
 }
 
 const worker = new Worker<ConvertJobData>(

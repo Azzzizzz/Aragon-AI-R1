@@ -32,12 +32,17 @@ const RESIZED_VARIANTS: VariantSpec[] = [
 
 async function processJob(job: Job<VariantsJobData>): Promise<void> {
   const { imageId, compressedPath } = job.data
+  const t0 = Date.now()
+  console.log(`[variants] ${imageId} → picked up`)
 
   const updated = await db.image.updateMany({
     where: { id: imageId },
     data: { processingStatus: 'GENERATING_VARIANTS', processingError: null },
   })
-  if (updated.count === 0) return
+  if (updated.count === 0) {
+    console.log(`[variants] ${imageId} → image was deleted, skipping`)
+    return
+  }
 
   const buffer = await downloadFromStorage(compressedPath)
   const compressedMeta = await sharp(buffer).metadata()
@@ -111,6 +116,8 @@ async function processJob(job: Job<VariantsJobData>): Promise<void> {
     where: { id: imageId },
     data: { processingStatus: 'COMPLETE', processingError: null },
   })
+
+  console.log(`[variants] ${imageId} ✓ done in ${Date.now() - t0}ms (5 variants) → COMPLETE`)
 }
 
 const worker = new Worker<VariantsJobData>(

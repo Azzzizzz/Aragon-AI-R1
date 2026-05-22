@@ -170,6 +170,9 @@ async function runValidationPipeline(record: { id: string; storagePath: string; 
       { imageId: record.id, storagePath },
       { jobId: record.id },
     )
+    console.log(`[validate] ${record.id} ✓ ACCEPTED → enqueued to convert`)
+  } else {
+    console.log(`[validate] ${record.id} ✗ REJECTED [${allReasons.join(', ')}]`)
   }
 }
 
@@ -268,6 +271,7 @@ imagesRouter.post('/:id/reprocess', async (req: express.Request, res: express.Re
       { jobId: image.id },
     )
 
+    console.log(`[reprocess] ${image.id} → re-enqueued to convert`)
     res.json({ enqueued: true })
   } catch (err) {
     console.error('POST /api/images/:id/reprocess error:', err)

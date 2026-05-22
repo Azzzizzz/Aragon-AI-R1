@@ -20,12 +20,17 @@ sharp.concurrency(1)
 
 async function processJob(job: Job<CompressJobData>): Promise<void> {
   const { imageId, convertedPath } = job.data
+  const t0 = Date.now()
+  console.log(`[compress] ${imageId} → picked up`)
 
   const updated = await db.image.updateMany({
     where: { id: imageId },
     data: { processingStatus: 'COMPRESSING', processingError: null },
   })
-  if (updated.count === 0) return
+  if (updated.count === 0) {
+    console.log(`[compress] ${imageId} → image was deleted, skipping`)
+    return
+  }
 
   const buffer = await downloadFromStorage(convertedPath)
 
@@ -51,6 +56,9 @@ async function processJob(job: Job<CompressJobData>): Promise<void> {
     { imageId, compressedPath },
     { jobId: imageId },
   )
+
+  const savedPct = Math.round((1 - compressionRatio) * 100)
+  console.log(`[compress] ${imageId} ✓ done in ${Date.now() - t0}ms (−${savedPct}%, ${(compressedSize / 1024).toFixed(1)}KB) → variants`)
 }
 
 const worker = new Worker<CompressJobData>(
