@@ -54,10 +54,10 @@ async function processJob(job: Job<VariantsJobData>): Promise<void> {
     }),
   )
 
-  // Upload the 4 resized variants in parallel
+  // Upload the 4 resized variants in parallel (upsert:true for retry safety)
   await Promise.all(
     resized.map(({ spec, buffer: outBuffer }) =>
-      uploadToStorage(outBuffer, `processed/${imageId}/${spec.filename}`, 'image/jpeg'),
+      uploadToStorage(outBuffer, `processed/${imageId}/${spec.filename}`, 'image/jpeg', { upsert: true }),
     ),
   )
 

@@ -27,11 +27,12 @@ export async function createSignedUploadUrl(storagePath: string): Promise<string
 export async function uploadToStorage(
   buffer: Buffer,
   storagePath: string,
-  mimeType: string
+  mimeType: string,
+  { upsert = false }: { upsert?: boolean } = {},
 ): Promise<string> {
   const { error } = await supabase.storage
     .from(STORAGE_BUCKET)
-    .upload(storagePath, buffer, { contentType: mimeType, upsert: false })
+    .upload(storagePath, buffer, { contentType: mimeType, upsert })
 
   if (error) throw new Error(`Storage upload failed: ${error.message}`)
 

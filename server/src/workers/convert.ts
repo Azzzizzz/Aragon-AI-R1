@@ -43,7 +43,8 @@ async function processJob(job: Job<ConvertJobData>): Promise<void> {
     .toBuffer()
 
   const convertedPath = `processed/${imageId}/converted.jpg`
-  await uploadToStorage(converted, convertedPath, 'image/jpeg')
+  // upsert:true → BullMQ retries are safe; previous partial output is overwritten
+  await uploadToStorage(converted, convertedPath, 'image/jpeg', { upsert: true })
 
   await compressQueue.add(
     imageId,

@@ -39,7 +39,7 @@ async function processJob(job: Job<CompressJobData>): Promise<void> {
   const compressionRatio = compressedSize / buffer.length
 
   const compressedPath = `processed/${imageId}/compressed.jpg`
-  await uploadToStorage(compressed, compressedPath, 'image/jpeg')
+  await uploadToStorage(compressed, compressedPath, 'image/jpeg', { upsert: true })
 
   await db.image.update({
     where: { id: imageId },
