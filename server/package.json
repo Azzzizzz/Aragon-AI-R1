@@ -13,6 +13,8 @@
     "start:convert": "node dist/workers/convert.js",
     "start:compress": "node dist/workers/compress.js",
     "start:variants": "node dist/workers/variants.js",
+    "fetch-faces": "tsx scripts/fetch-test-faces.ts",
+    "loadtest": "tsx scripts/load-test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
