@@ -58,7 +58,10 @@ async function processJob(job: Job<CompressJobData>): Promise<void> {
   )
 
   const savedPct = Math.round((1 - compressionRatio) * 100)
-  console.log(`[compress] ${imageId} ✓ done in ${Date.now() - t0}ms (−${savedPct}%, ${(compressedSize / 1024).toFixed(1)}KB) → variants`)
+  const kb = (n: number) => (n / 1024).toFixed(1) + 'KB'
+  console.log(
+    `[compress] ${imageId} ✓ done in ${Date.now() - t0}ms — q85 ${kb(buffer.length)} → ${kb(compressedSize)} (−${savedPct}% vs converted) → variants`,
+  )
 }
 
 const worker = new Worker<CompressJobData>(

@@ -54,7 +54,10 @@ async function processJob(job: Job<ConvertJobData>): Promise<void> {
     { jobId: imageId },
   )
 
-  console.log(`[convert] ${imageId} ✓ done in ${Date.now() - t0}ms → compress`)
+  const kb = (n: number) => (n / 1024).toFixed(1) + 'KB'
+  console.log(
+    `[convert] ${imageId} ✓ done in ${Date.now() - t0}ms — normalized ${kb(buffer.length)} → ${kb(converted.length)} JPEG q92 (EXIF stripped, sRGB) → compress`,
+  )
 }
 
 const worker = new Worker<ConvertJobData>(

@@ -117,7 +117,13 @@ async function processJob(job: Job<VariantsJobData>): Promise<void> {
     data: { processingStatus: 'COMPLETE', processingError: null },
   })
 
-  console.log(`[variants] ${imageId} ✓ done in ${Date.now() - t0}ms (5 variants) → COMPLETE`)
+  const kb = (n: number) => (n / 1024).toFixed(1) + 'K'
+  const sizes = resized
+    .map(({ spec, buffer: b, meta }) => `${spec.type.toLowerCase()} ${meta.width}×${meta.height} ${kb(b.length)}`)
+    .join(', ')
+  console.log(
+    `[variants] ${imageId} ✓ done in ${Date.now() - t0}ms — ${sizes}, full→compressed.jpg → COMPLETE`,
+  )
 }
 
 const worker = new Worker<VariantsJobData>(
