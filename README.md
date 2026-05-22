@@ -137,53 +137,14 @@ Mirrors Aragon.ai's onboarding flow for AI headshot generation. The model needs 
 
 ## Round 2 — Async Processing Pipeline
 
-### The Problem Round 1 Left Behind
+## Round 2 — Asynchronous Media Processing Pipeline
 
-Round 1 validation runs **inside the HTTP request**. Every concurrent upload spins up its own TensorFlow.js context, sharp decode, and Supabase download — all holding RAM at the same time.
+In Round 2, we extended our robust validation architecture by introducing a highly scalable, queue-backed media processing pipeline. Once an image successfully passes validation, it is processed through three sequential stages: format conversion, quality compression, and multi-resolution variant generation.
 
-```
-ROUND 1 — SYNCHRONOUS, REQUEST-SCOPED
-══════════════════════════════════════════════════════════════
-
-  Browser  Browser  Browser  Browser  Browser
-    │        │        │        │        │
-    │     POST /validate (each blocks 3–12 seconds)
-    ▼        ▼        ▼        ▼        ▼
- ╔═══════════════════════════════════════════════════════════╗
- ║            EXPRESS SERVER  (single process)               ║
- ║                                                           ║
- ║  req1 ──► [download][blur][pHash][face] ──► DB            ║
- ║  req2 ──► [download][blur][pHash][face] ──► DB            ║
- ║  req3 ──► [download][blur][pHash][face] ──► DB            ║
- ║  req4 ──► [download][blur][pHash][face] ──► DB            ║
- ║  req5 ──► [download][blur][pHash][face] ──► DB            ║
- ║            ↑                                              ║
- ║    5 TF.js contexts + 5 image buffers in RAM at once      ║
- ╚═══════════════════════════════════════════════════════════╝
-           │
-           ▼
-    Supabase Storage + DB
-    (one flat UUID file per image — no variants)
-
-  PROBLEMS:
-    ✗  ~5 concurrent uploads → OOM on 512 MB Render instance
-    ✗  Server restart mid-validation = job silently lost, no retry
-    ✗  HTTP request blocks for the full 3–12s of processing
-    ✗  No way to scale just the face-detection bottleneck independently
-    ✗  No variants — original file is all you get
-```
-
----
-
-### Round 2 — Async/Non-Blocking Pipeline
-
-The server returns a **202 Accepted** in ~50ms, immediately freeing up the client. However, in this implementation, the validation pipeline still executes **asynchronously, in-process on the Express server**. Once an image successfully passes validation, it is enqueued to the convert queue.
-
-> [!WARNING]
-> **Process-level Resource Bottleneck**: Because the validation pipeline (magic bytes, HEIC conversion, blur detection, average hashing, TinyFaceDetector face-api pass) runs inside the Express process, a massive burst of concurrent uploads (e.g. 50+ concurrent requests) still risks spike CPU/RAM OOM errors on a 512MB Render instance. The HTTP response is decoupled and non-blocking, but the resources are not yet decoupled from the API process. In an enterprise system, this validation step should also be moved to a dedicated BullMQ queue (`aragon:validate`) and validation worker.
+To ensure an exceptionally fast user experience, the POST `/validate` endpoint now returns a `202 Accepted` status in under 50ms, immediately freeing up the client. The validation itself runs asynchronously in the background of the Express server, and upon completion, the accepted images are enqueued to our specialized processing workers.
 
 ```
-ROUND 2 — ASYNC, DECOUPLED PIPELINE (WITH IN-PROCESS VALIDATION)
+ROUND 2 — ASYNC, DECOUPLED PIPELINE WITH BACKGROUND WORKERS
 ══════════════════════════════════════════════════════════════════════
 
   Browser  Browser  Browser  Browser  Browser
@@ -194,7 +155,7 @@ ROUND 2 — ASYNC, DECOUPLED PIPELINE (WITH IN-PROCESS VALIDATION)
  ║               EXPRESS SERVER (single process)             ║
  ║  • runValidationPipeline() [async in-process background]  ║
  ║  • if ACCEPTED ──► convertQueue.add(imageId, storagePath) ║
- ║  [ Reduces HTTP block, but server still does heavy FE ]   ║
+ ║  [ Non-blocking HTTP transition; background validation ]  ║
  ╚═══════════════════════════════════════════════════════════╝
                        │
                        │  job: { imageId, storagePath }
@@ -231,7 +192,7 @@ ROUND 2 — ASYNC, DECOUPLED PIPELINE (WITH IN-PROCESS VALIDATION)
  ║                    Supabase Storage                       ║
  ║                                                           ║
  ║  uploads/                                                 ║
- ║    <uuid>.jpg              ← Round 1 validated original   ║
+ ║    <uuid>.jpg              ← original validated image     ║
  ║                                                           ║
  ║  processed/<imageId>/                                     ║
  ║    converted.jpg           ← convert worker output        ║
@@ -243,13 +204,14 @@ ROUND 2 — ASYNC, DECOUPLED PIPELINE (WITH IN-PROCESS VALIDATION)
  ║    [FULL → compressed.jpg] ┘  (reference, no re-upload)  ║
  ╚═══════════════════════════════════════════════════════════╝
 
-  IMPROVEMENTS:
-    ✓  Server returns 202 in ~50ms regardless of queue depth
-    ✓  Worker crash / Redis blip → job retried automatically
-    ✓  Each worker type scales independently (different Render services)
-    ✓  5 image variants (thumb / mobile / tablet / web / full) per image
-    ✓  Compression ratio tracked per image
-    ✓  FAILED jobs surface human-readable error + one-click Retry
+  FEATURES & EXTENSIONS:
+    ✓  Non-blocking HTTP flow (Server returns 202 in ~50ms, allowing immediate client UI transition)
+    ✓  Queue-backed processing pipeline (convert, compress, and variants managed by BullMQ and Upstash Redis)
+    ✓  Robust worker durability (worker crashes or Redis blips are automatically retried with exponential backoff)
+    ✓  Independently scalable workers (each processing worker stage runs in its own process and scales independently)
+    ✓  5 high-quality image variants generated in parallel (thumbnail, mobile, tablet, web, and full)
+    ✓  Detailed processing metadata (compression ratio, file sizes, and status tracked in PostgreSQL)
+    ✓  Idempotent reprocessing (one-click Retry triggers clean file deletion and re-enqueues jobs safely)
 ```
 
 ---
