@@ -75,7 +75,7 @@ imagesRouter.post('/upload-url', async (req: express.Request, res: express.Respo
     const [uploadUrl, image] = await Promise.all([
       createSignedUploadUrl(storagePath),
       db.image.create({
-        data: { filename, storagePath, publicUrl, status: ImageStatus.PENDING_UPLOAD },
+        data: { filename, storagePath, publicUrl, status: ImageStatus.PENDING_UPLOAD, processingStatus: null },
       }),
     ])
 

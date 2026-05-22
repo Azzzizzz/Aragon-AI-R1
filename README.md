@@ -922,6 +922,218 @@ Implemented inline with `sharp` (already a dependency) rather than adding `imgha
 
 ---
 
+## Deployment
+
+### Service Topology on Render
+
+Round 2 runs as **4 separate Render services** (1 web + 3 background workers) all sharing the same Supabase Postgres, Supabase Storage, and Upstash Redis. The frontend is deployed separately on Vercel.
+
+```
+  Vercel (Frontend)
+  ┌─────────────────────────────────┐
+  │  client/  (Vite + React)        │
+  │  VITE_API_URL → Render API URL  │
+  └─────────────────────────────────┘
+                  │ HTTP
+                  ▼
+  Render (Web Service)
+  ┌─────────────────────────────────────────────────────┐
+  │  aragon-api                                         │
+  │  Root dir: server/                                  │
+  │  Build:    npm install && npm run build             │
+  │  Start:    node --expose-gc dist/index.js           │
+  │  Handles:  /api/images/* — upload, validate,        │
+  │            status, reprocess, delete                │
+  └──────────────────────┬──────────────────────────────┘
+                         │ enqueue jobs
+                         ▼
+  ┌──────────────────────────────────────┐
+  │         UPSTASH REDIS                │
+  │  aragon:convert / compress / variants│
+  └──────┬──────────────┬────────────────┘
+         │              │              │
+         ▼              ▼              ▼
+  Render (Background Worker × 3)
+  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+  │aragon-convert│ │aragon-compress│ │aragon-variants│
+  │              │ │              │ │              │
+  │Root: server/ │ │Root: server/ │ │Root: server/ │
+  │Build: npm i  │ │Build: npm i  │ │Build: npm i  │
+  │       + build│ │       + build│ │       + build│
+  │Start: node   │ │Start: node   │ │Start: node   │
+  │  dist/workers│ │  dist/workers│ │  dist/workers│
+  │  /convert.js │ │  /compress.js│ │  /variants.js│
+  └──────────────┘ └──────────────┘ └──────────────┘
+         │              │              │
+         └──────────────┴──────────────┘
+                        │ reads/writes
+                        ▼
+  ┌────────────────────────────────────────┐
+  │       Supabase (Postgres + Storage)    │
+  │  DB: Image rows, ImageVariant rows     │
+  │  Storage: uploads/ + processed/<id>/   │
+  └────────────────────────────────────────┘
+```
+
+---
+
+### Render Service Configuration
+
+#### 1. API — Web Service (`aragon-api`)
+
+| Field | Value |
+|-------|-------|
+| **Type** | Web Service |
+| **Root directory** | `server` |
+| **Build command** | `npm install && npm run build` |
+| **Start command** | `node --expose-gc dist/index.js` |
+| **Instance type** | Starter (512 MB) or Standard (2 GB for production) |
+| **Auto-deploy** | On push to `main` |
+
+#### 2. Convert Worker — Background Worker (`aragon-convert`)
+
+| Field | Value |
+|-------|-------|
+| **Type** | Background Worker |
+| **Root directory** | `server` |
+| **Build command** | `npm install && npm run build` |
+| **Start command** | `node dist/workers/convert.js` |
+| **Instance type** | Starter (concurrency=1 means it's CPU-light at idle) |
+| **Scaling** | Add replicas as convert throughput demands grow |
+
+#### 3. Compress Worker — Background Worker (`aragon-compress`)
+
+| Field | Value |
+|-------|-------|
+| **Type** | Background Worker |
+| **Root directory** | `server` |
+| **Build command** | `npm install && npm run build` |
+| **Start command** | `node dist/workers/compress.js` |
+| **Instance type** | Starter |
+| **Scaling** | Add replicas independently of convert and variants |
+
+#### 4. Variants Worker — Background Worker (`aragon-variants`)
+
+| Field | Value |
+|-------|-------|
+| **Type** | Background Worker |
+| **Root directory** | `server` |
+| **Build command** | `npm install && npm run build` |
+| **Start command** | `node dist/workers/variants.js` |
+| **Instance type** | Starter |
+| **Scaling** | Add replicas independently |
+
+---
+
+### Environment Variables Per Service
+
+All four Render services need the same core set. Add each as a Render environment variable (not in `.env` files — those are local-only).
+
+| Variable | API | Convert | Compress | Variants |
+|----------|-----|---------|----------|---------|
+| `DATABASE_URL` | ✓ | ✓ | ✓ | ✓ |
+| `DIRECT_URL` | ✓ | — | — | — |
+| `SUPABASE_URL` | ✓ | ✓ | ✓ | ✓ |
+| `SUPABASE_SERVICE_KEY` | ✓ | ✓ | ✓ | ✓ |
+| `STORAGE_BUCKET` | ✓ | ✓ | ✓ | ✓ |
+| `UPSTASH_REDIS_URL` | ✓ | ✓ | ✓ | ✓ |
+| `NODE_ENV` | `production` | `production` | `production` | `production` |
+| `CLIENT_URL` | ✓ (Vercel URL) | — | — | — |
+| `PORT` | `3000` | — | — | — |
+
+> **Tip:** Use a Render [Environment Group](https://render.com/docs/environment-variables#environment-groups) to share the common variables across all 4 services at once. Any change to the group propagates to all services automatically.
+
+---
+
+### Deployment Flow (What Happens on `git push main`)
+
+```
+  git push main
+       │
+       ▼
+  GitHub triggers Render auto-deploy on all 4 services simultaneously
+
+  ┌─────────────────────────────────────────────────────┐
+  │ Each service independently:                         │
+  │                                                     │
+  │  1. Pull latest code                                │
+  │  2. Run build: npm install && npm run build         │
+  │     (TypeScript → dist/ via tsc)                    │
+  │  3. New instance starts (new process)               │
+  │  4. Old instance receives SIGTERM                   │
+  │     Workers: finish current job, then exit          │
+  │     API: drain in-flight HTTP requests, then exit   │
+  │  5. Traffic/jobs routed to new instance             │
+  └─────────────────────────────────────────────────────┘
+
+  Zero-downtime for the API (Render handles graceful swap).
+
+  Workers: a job in progress when SIGTERM fires will
+  complete (shutdown handler calls worker.close() which
+  waits for active job to finish before exiting).
+  No jobs are lost on redeploy.
+```
+
+The `SIGTERM` shutdown handler in every worker:
+```typescript
+const shutdown = async () => {
+  await worker.close()   // waits for active job to finish
+  await connection.quit()
+  process.exit(0)
+}
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
+```
+
+---
+
+### Horizontal Scaling — How to Scale Each Worker
+
+All workers are **stateless and pull-based**. Scaling is purely a replica count decision — no code changes, no configuration changes, no coordination needed.
+
+```
+  CURRENT (1 replica each):
+  ┌──────────┐   ┌──────────┐   ┌──────────┐
+  │ convert  │   │ compress │   │ variants │
+  │ ×1       │   │ ×1       │   │ ×1       │
+  └──────────┘   └──────────┘   └──────────┘
+
+  AFTER SCALING (if convert is the bottleneck):
+  ┌──────────┐   ┌──────────┐   ┌──────────┐
+  │ convert  │   │ compress │   │ variants │
+  │ ×3       │   │ ×1       │   │ ×1       │
+  └──────────┘   └──────────┘   └──────────┘
+
+  All 3 convert replicas pull from the same aragon:convert
+  Redis queue. Redis distributes jobs atomically — no
+  duplicate processing, no coordination needed.
+```
+
+| Bottleneck signal | Action |
+|-------------------|--------|
+| `aragon:convert` queue depth growing, convert workers at 100% CPU | Add convert replicas on Render |
+| Images stuck at COMPRESSING for a long time | Add compress replicas |
+| Images stuck at GENERATING_VARIANTS | Add variants replicas |
+| API response time rising | Scale the Web Service (vertical or horizontal) |
+
+---
+
+### Schema Migrations on Deploy
+
+Workers and the API share the same Prisma client. When the schema changes:
+
+```bash
+# Run ONCE before deploying code — from local with DIRECT_URL set:
+cd server && npx prisma db push
+
+# Then deploy code to all 4 services as normal.
+# Workers pick up the new client types automatically after rebuild.
+```
+
+> **Never run `prisma db push` from a worker process at startup** — it would race with other workers on cold start and can lock the DB.
+
+---
+
 ## Local Development
 
 **Prerequisites:** Node 20+, Supabase project with a Storage bucket, Upstash Redis account (free tier).
