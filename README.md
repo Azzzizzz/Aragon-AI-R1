@@ -1,6 +1,11 @@
-# Aragon AI — Image Upload & Validation
+# Aragon AI — Image Upload, Validation & Processing Pipeline
 
-A full-stack web app where users drag-and-drop portrait photos and the system categorises each one into **Accepted** or **Rejected** in near real-time, with a precise reason for every rejection. Mirrors Aragon.ai's onboarding flow for AI headshot generation — the model needs clean, varied, single-face training photos, so we filter at upload time rather than downstream.
+A full-stack web app where users drag-and-drop portrait photos and the system:
+
+1. **Validates** each image in real-time — magic-byte format checks, blur detection, face detection, perceptual-hash duplicate detection (**Round 1**)
+2. **Processes** every accepted image through an async queue-backed pipeline — format normalisation, compression, and multi-resolution variant generation (**Round 2**)
+
+Mirrors Aragon.ai's onboarding flow for AI headshot generation. The model needs clean, varied, single-face training photos, so we filter and process at upload time.
 
 ---
 
@@ -14,6 +19,8 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 ---
 
 ## Tech Stack
+
+### Round 1 — Upload & Validation
 
 | Layer | Choice | Why |
 |---|---|---|
@@ -29,6 +36,16 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
 | Perceptual hashing | Custom aHash (average hash) | 64-bit hash, Hamming-distance duplicate detection |
 | File upload | Pre-signed URL (Supabase Storage) | Client uploads directly to storage; server never buffers bytes |
 | Deploy | Vercel (FE) + Render (BE) | Git-connected, env vars UI |
+
+### Round 2 — Async Processing Pipeline (additions)
+
+| Layer | Choice | Why |
+|---|---|---|
+| Queue | **BullMQ v5** | Purpose-built task queue for Node.js — retry, backoff, deduplication, and per-job status out of the box. No manual retry logic needed. |
+| Queue backend | **Upstash Redis** (TLS `rediss://`) | Managed Redis — zero ops, pay-per-request, free tier, works directly with ioredis. No broker to provision. |
+| Redis client | **ioredis** | Required by BullMQ. Handles the blocking `BRPOPLPUSH` pop pattern for worker pull semantics. |
+| Image resize | **sharp** (already installed) | Generates 4 resized variants in parallel via `Promise.all` + libvips. |
+| Dev process manager | **concurrently** | Starts server + 3 workers in one `npm run dev` command with colour-coded output per process. |
 
 ---
 
@@ -115,6 +132,338 @@ A full-stack web app where users drag-and-drop portrait photos and the system ca
                                        │  in browser     │
                                        └─────────────────┘
 ```
+
+---
+
+## Round 2 — Async Processing Pipeline
+
+### The Problem Round 1 Left Behind
+
+Round 1 validation runs **inside the HTTP request**. Every concurrent upload spins up its own TensorFlow.js context, sharp decode, and Supabase download — all holding RAM at the same time.
+
+```
+ROUND 1 — SYNCHRONOUS, REQUEST-SCOPED
+══════════════════════════════════════════════════════════════
+
+  Browser  Browser  Browser  Browser  Browser
+    │        │        │        │        │
+    │     POST /validate (each blocks 3–12 seconds)
+    ▼        ▼        ▼        ▼        ▼
+ ╔═══════════════════════════════════════════════════════════╗
+ ║            EXPRESS SERVER  (single process)               ║
+ ║                                                           ║
+ ║  req1 ──► [download][blur][pHash][face] ──► DB            ║
+ ║  req2 ──► [download][blur][pHash][face] ──► DB            ║
+ ║  req3 ──► [download][blur][pHash][face] ──► DB            ║
+ ║  req4 ──► [download][blur][pHash][face] ──► DB            ║
+ ║  req5 ──► [download][blur][pHash][face] ──► DB            ║
+ ║            ↑                                              ║
+ ║    5 TF.js contexts + 5 image buffers in RAM at once      ║
+ ╚═══════════════════════════════════════════════════════════╝
+           │
+           ▼
+    Supabase Storage + DB
+    (one flat UUID file per image — no variants)
+
+  PROBLEMS:
+    ✗  ~5 concurrent uploads → OOM on 512 MB Render instance
+    ✗  Server restart mid-validation = job silently lost, no retry
+    ✗  HTTP request blocks for the full 3–12s of processing
+    ✗  No way to scale just the face-detection bottleneck independently
+    ✗  No variants — original file is all you get
+```
+
+---
+
+### Round 2 — Queue-Decoupled Pipeline
+
+The server becomes thin: validate, accept, **enqueue, return 202**. All heavy work moves to three independent worker processes connected to the same Redis queue.
+
+```
+ROUND 2 — ASYNC, QUEUE-DECOUPLED PIPELINE
+══════════════════════════════════════════════════════════════════════
+
+  Browser  Browser  Browser  Browser  Browser
+    │        │        │        │        │
+    │     POST /validate  →  returns 202 in ~50ms (just enqueues)
+    ▼        ▼        ▼        ▼        ▼
+ ╔═══════════════════════════════════════════════════╗
+ ║         EXPRESS SERVER  (thin — enqueues only)    ║
+ ║  validate → ACCEPTED → processingStatus=QUEUED    ║
+ ║  → convertQueue.add(imageId, storagePath)         ║
+ ║  → return 202                                     ║
+ ║  [ never OOMs on validation work alone ]          ║
+ ╚═══════════════════════════════════════════════════╝
+                       │
+                       │  job: { imageId, storagePath }
+                       ▼
+ ╔═══════════════════════════════════════════════════════════╗
+ ║               UPSTASH REDIS  (BullMQ backend)             ║
+ ║                                                           ║
+ ║   aragon:convert  ████████████████████  (jobs waiting)    ║
+ ║   aragon:compress ████████████          (jobs waiting)    ║
+ ║   aragon:variants ████████              (jobs waiting)    ║
+ ║                                                           ║
+ ║   • Jobs persist across worker/server restarts            ║
+ ║   • Atomic BRPOPLPUSH — only one worker claims each job   ║
+ ║   • 3 attempts + exponential backoff (2s → 4s → 8s)       ║
+ ╚═══════════════════════════════════════════════════════════╝
+          │                    │                    │
+          │  pull              │  pull              │  pull
+          ▼                    ▼                    ▼
+  ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
+  │ CONVERT       │   │ COMPRESS      │   │ VARIANTS      │
+  │ worker        │   │ worker        │   │ worker        │
+  │               │   │               │   │               │
+  │ concur: 1     │   │ concur: 2     │   │ concur: 2     │
+  │ (CPU-heavy    │   │ (lower CPU,   │   │ (I/O-bound    │
+  │  re-encode)   │   │  pipeline     │   │  after decode)│
+  │               │   │  overlap)     │   │               │
+  │ Scale by      │   │ Scale by      │   │ Scale by      │
+  │ adding procs  │   │ adding procs  │   │ adding procs  │
+  └───────┬───────┘   └───────┬───────┘   └───────┬───────┘
+          │ enqueue           │ enqueue           │
+          │ compress          │ variants          │ set COMPLETE
+          ▼                   ▼                   ▼
+ ╔═══════════════════════════════════════════════════════════╗
+ ║                    Supabase Storage                       ║
+ ║                                                           ║
+ ║  uploads/                                                 ║
+ ║    <uuid>.jpg              ← Round 1 validated original   ║
+ ║                                                           ║
+ ║  processed/<imageId>/                                     ║
+ ║    converted.jpg           ← convert worker output        ║
+ ║    compressed.jpg          ← compress worker output       ║
+ ║    thumb.jpg   (300 px)    ┐                              ║
+ ║    mobile.jpg  (480 px)    │                              ║
+ ║    tablet.jpg  (768 px)    ├── variants worker output     ║
+ ║    web.jpg    (1200 px)    │                              ║
+ ║    [FULL → compressed.jpg] ┘  (reference, no re-upload)  ║
+ ╚═══════════════════════════════════════════════════════════╝
+
+  IMPROVEMENTS:
+    ✓  Server returns 202 in ~50ms regardless of queue depth
+    ✓  Worker crash / Redis blip → job retried automatically
+    ✓  Each worker type scales independently (different Render services)
+    ✓  5 image variants (thumb / mobile / tablet / web / full) per image
+    ✓  Compression ratio tracked per image
+    ✓  FAILED jobs surface human-readable error + one-click Retry
+```
+
+---
+
+### Pipeline Status Progression
+
+The client polls `GET /api/images/:id/status` every 2 seconds. Status is written to the DB **at the start** of each stage (not just at completion), so the UI shows exactly which stage is running in real time.
+
+```
+  Image accepted by validation
+            │
+            ▼
+       ┌─────────┐
+       │  QUEUED │  ← processingStatus set on Image row
+       └────┬────┘     job added to aragon:convert queue
+            │
+            │  convert worker pulls job
+            ▼
+       ┌──────────────┐
+       │  CONVERTING  │  ← written to DB immediately on pickup
+       └──────┬───────┘
+              │  sharp().toColorspace('srgb').jpeg({ quality: 92 })
+              │  strips EXIF (GPS, device model)
+              │  uploads processed/<id>/converted.jpg
+              │  enqueues to compress queue
+              ▼
+       ┌─────────────┐
+       │ COMPRESSING │  ← compress worker picks up
+       └──────┬──────┘
+              │  sharp().jpeg({ quality: 85 })
+              │  records compressionRatio + compressedSize
+              │  uploads processed/<id>/compressed.jpg
+              │  enqueues to variants queue
+              ▼
+       ┌────────────────────┐
+       │ GENERATING_VARIANTS│  ← variants worker picks up
+       └──────────┬─────────┘
+                  │  Promise.all([ resize(300), resize(480),
+                  │               resize(768), resize(1200) ])
+                  │  FULL → reference to compressed.jpg
+                  │  upserts 5 ImageVariant rows
+                  │
+             ┌────┴────┐
+             ▼         ▼
+         COMPLETE    FAILED  ← any worker can write FAILED
+                        │      with processingError message
+                        │
+                        ▼
+               POST /api/images/:id/reprocess
+               1. delete pipeline storage files
+               2. delete ImageVariant rows
+               3. reset processingStatus → QUEUED
+               4. re-enqueue to convert
+```
+
+---
+
+### Why Three Workers, Not One
+
+The spec required independently scalable services. Three workers with three queues means:
+
+| Worker | Concurrency | Resource profile | Scale trigger |
+|--------|-------------|------------------|--------------|
+| convert | 1 per process | CPU-heavy (re-encode) | Add more convert processes on Render |
+| compress | 2 per process | Moderate CPU | Add compress instances if it lags |
+| variants | 2 per process | I/O-bound after first decode | Add variant instances for high volume |
+
+A monolith worker can't do this. If variants become the bottleneck, you can't scale just that stage without scaling everything else with it.
+
+**Sequential between stages, parallel within:**
+Stages are sequential because each depends on the output file of the previous one (compressed.jpg → variants). But inside the variants worker, all 4 resizes happen in `Promise.all` — no reason to wait on thumb.jpg before starting mobile.jpg.
+
+---
+
+### Why BullMQ + Redis, Not Kafka or RabbitMQ
+
+```
+  Feature                  BullMQ + Redis    RabbitMQ       Kafka
+  ───────────────────────  ───────────────   ────────────   ──────────────
+  Job retry built-in       ✓ native          Manual         Manual
+  Exponential backoff      ✓ native          Via plugins    Via consumer
+  Job deduplication        ✓ jobId param     Manual         Manual
+  Per-job status           ✓ native          Limited        Not native
+  Delayed jobs             ✓ native          Via plugins    Not native
+  Ops overhead             Near-zero         Moderate       High
+  Throughput               ~10k jobs/sec     ~50k msg/sec   ~1M msg/sec
+  Persistence              Memory + AOF log  Disk-first     Disk-first
+  Best for                 Task queues ✓     Routing/fanout Event streams
+  Our workload             ✓ exact fit       Overkill       Overkill
+```
+
+**Kafka** is designed for event streaming at millions of messages per second. It's the right choice for telemetry aggregation, event sourcing, and multi-datacenter replay. For "process this image and advance to the next stage", it's operational complexity with no benefit — you'd need consumer groups, offset management, partition tuning, and manual retry logic.
+
+**RabbitMQ** is closer (task queue model), but requires an AMQP broker to run and manage, retry ergonomics are worse, and job-level visibility requires the management plugin.
+
+**BullMQ** is purpose-built for exactly this pattern: stateful jobs, typed payloads, configurable retry with backoff, deduplication via `jobId`, and a clean TypeScript API. Upstash adds zero-ops managed Redis on top.
+
+**When to migrate to Kafka:** sustained queue backlog of 100k+ jobs, need for multi-datacenter replication guarantees, or replay of historical events. None of those apply here.
+
+---
+
+### Redis Tradeoffs — The Honest Version
+
+Redis is memory-first. If the instance crashes without AOF persistence fsyncing on every write, in-flight jobs could be lost. Upstash free tier uses optimistic-volatile eviction, which means under memory pressure it can evict keys.
+
+**Why it's acceptable here:**
+- Jobs are short-lived. The queue rarely holds more than a few dozen jobs at once.
+- The moment a worker picks up a job, it writes the new `processingStatus` to Postgres. If the job disappears from Redis, the image sits at its last status (`CONVERTING`, etc.) — visible to the user, recoverable via `/reprocess`.
+- This is not silent data loss — it's a stalled pipeline with a clear error path.
+
+**The real durability guarantee** comes from Postgres, not Redis. Redis is the coordination layer; Postgres is the source of truth.
+
+---
+
+### Distributed Coordination — How Workers Share a Queue
+
+```
+  WORKER PULL MODEL (not push)
+  ════════════════════════════
+
+  Worker process starts
+        │
+        │  Opens blocking Redis connection
+        │  Calls BRPOPLPUSH (via BullMQ)
+        │  "Give me the next job — block here if queue is empty"
+        │
+  Job available in Redis
+        │
+        ▼
+  Redis atomically moves job from "waiting" list → "active" set
+  (only ONE worker wins this atomic pop — Redis is the coordinator)
+        │
+        ▼
+  Worker processes the job
+        │
+     ┌──┴──┐
+     ▼     ▼
+  resolve  throw
+     │     │
+     ▼     ▼
+  completed  failed → retry (up to 3 attempts)
+
+
+  THREE CONVERT WORKERS COMPETING FOR THE SAME QUEUE:
+  ════════════════════════════════════════════════════
+
+  Worker-A ──[BRPOPLPUSH]──▶ Redis ──▶ job-1 (Worker-A gets it)
+  Worker-B ──[BRPOPLPUSH]──▶ Redis ──▶ job-2 (Worker-B gets it)
+  Worker-C ──[BRPOPLPUSH]──▶ Redis ──▶ (waiting — no more jobs)
+
+  Redis distributes load naturally.
+  No master/coordinator process required.
+  Adding a 4th worker instance = instant extra throughput.
+```
+
+**Distributed lock:** Once a job is in the active set, no other worker can see it. BullMQ's stalled-job detector reclaims jobs whose worker crashed mid-processing — they re-enter the waiting list after a timeout. This is the **at-least-once** guarantee: rare crashes may cause a job to run twice, which is why idempotency is non-negotiable.
+
+---
+
+### Idempotency — Why It's Non-Negotiable
+
+At-least-once delivery means a job **will occasionally run twice** (worker crash + stalled job reclaim). Every stage must produce the same result whether it runs once or three times.
+
+| Stage | How idempotency is achieved |
+|-------|-----------------------------|
+| Convert upload | `upsert: true` on Supabase upload — second run overwrites same path |
+| Compress upload | `upsert: true` on Supabase upload |
+| Variant uploads | `upsert: true` on all 4 variant files |
+| ImageVariant rows | Prisma `upsert` keyed on `@@unique([imageId, type])` — no duplicates |
+| Enqueue on validate | `jobId: imageId` — BullMQ rejects a duplicate job with the same ID |
+| Reprocess | Removes old jobId from BullMQ history before re-enqueuing |
+
+---
+
+### Statelessness and Horizontal Scaling
+
+Each worker holds **zero in-process state between jobs**. No cached image buffers, no job counters, no shared memory. Every piece of state that must survive a job lives in either:
+- **Postgres** — `processingStatus`, `ImageVariant` rows, `compressionRatio`
+- **Supabase Storage** — the image files
+
+The worker process itself is ephemeral. Kill it mid-job, the stalled detector re-queues the work. Start 10 more workers, they immediately start pulling and processing — zero configuration change.
+
+This is what "independently scalable" actually means: each worker type (convert / compress / variants) can be scaled to a different replica count on Render based on its own throughput profile.
+
+---
+
+### Round 2 API Endpoints
+
+#### `GET /api/images/:id/status`
+
+Returns the current pipeline state. Polled by the client every 2 seconds after validation.
+
+```json
+{
+  "status": "ACCEPTED",
+  "processingStatus": "COMPLETE",
+  "processingError": null,
+  "compressionRatio": 0.62,
+  "compressedSize": 1138432,
+  "variants": [
+    { "type": "THUMBNAIL", "storageUrl": "https://...", "width": 300, "height": 400, "fileSize": 28672 },
+    { "type": "MOBILE",    "storageUrl": "https://...", "width": 480, "height": 640, "fileSize": 52224 },
+    { "type": "TABLET",    "storageUrl": "https://...", "width": 768, "height": 1024, "fileSize": 92160 },
+    { "type": "WEB",       "storageUrl": "https://...", "width": 1200, "height": 1600, "fileSize": 159744 },
+    { "type": "FULL",      "storageUrl": "https://...", "width": 3024, "height": 4032, "fileSize": 1138432 }
+  ]
+}
+```
+
+#### `POST /api/images/:id/reprocess`
+
+Retries a `FAILED` job. Safe to call multiple times (idempotent).
+
+- Only works if `processingStatus === 'FAILED'`
+- Execution order: delete storage files → delete DB rows → reset to QUEUED → re-enqueue
+- Response: `{ enqueued: true }` or `400 { message: "Image is not in FAILED state" }`
 
 ---
 
@@ -359,6 +708,24 @@ enum RejectionReason {
   NO_FACE
 }
 
+// Round 2 additions
+enum ProcessingStatus {
+  QUEUED
+  CONVERTING
+  COMPRESSING
+  GENERATING_VARIANTS
+  COMPLETE
+  FAILED
+}
+
+enum VariantType {
+  THUMBNAIL   // 300px wide
+  MOBILE      // 480px wide
+  TABLET      // 768px wide
+  WEB         // 1200px wide
+  FULL        // original compressed — reference only, no re-upload
+}
+
 model Image {
   id               String            @id @default(cuid())
   filename         String
@@ -371,16 +738,41 @@ model Image {
   height           Int?
   mimeType         String?                          // always jpeg/png after conversion
   pHash            String?                          // 16-char hex aHash for duplicate check
+  // Round 2 fields
+  processingStatus ProcessingStatus?               // null on REJECTED images
+  processingError  String?                         // set by worker on FAILED
+  compressionRatio Float?                          // e.g. 0.62 = 38% smaller
+  compressedSize   Int?                            // bytes after compression
+  variants         ImageVariant[]                  // 5 rows once COMPLETE
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
-  @@index([status])                  // AcceptedGrid / RejectedGrid filter
-  @@index([createdAt(sort: Desc)])   // default list order
-  @@index([pHash])                   // duplicate check lookup
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@index([pHash])
+  @@index([processingStatus])                      // Round 2: admin queries by stage
+}
+
+model ImageVariant {
+  id          String      @id @default(cuid())
+  imageId     String
+  image       Image       @relation(fields: [imageId], references: [id], onDelete: Cascade)
+  type        VariantType
+  storageUrl  String
+  storagePath String
+  width       Int
+  height      Int
+  fileSize    Int
+  createdAt   DateTime    @default(now())
+
+  @@unique([imageId, type])   // idempotency guarantee — upsert never creates duplicates
+  @@index([imageId])
 }
 ```
 
 > `rejectionReasons` is a Postgres array column — no join table, no extra query, list renders in one `findMany`.
+>
+> `@@unique([imageId, type])` on `ImageVariant` is the idempotency key: retrying a failed variants job runs `upsert` against this constraint — existing rows are updated in-place, no duplicates created.
 
 ---
 
@@ -388,46 +780,61 @@ model Image {
 
 ```
 .
-├── client/                         Frontend (Vite + React)
+├── client/                           Frontend (Vite + React)
 │   └── src/
 │       ├── pages/
-│       │   └── UploadPage.tsx      Full layout — two-panel, queries, progress bar
+│       │   └── UploadPage.tsx        Full layout — two-panel, queries, progress bar
 │       ├── components/
-│       │   ├── UploadDropzone.tsx  Drag-and-drop, per-file upload + polling loop
-│       │   ├── SessionGrid.tsx     In-place grid — processing → accepted in same slot
-│       │   ├── FileListItem.tsx    Left-panel upload row — stage label + icon
-│       │   ├── ImageCard.tsx       Thumbnail + trash + hover tooltip for reason
-│       │   ├── AcceptedGrid.tsx    Historical accepted images (presentational)
-│       │   └── RejectedGrid.tsx    sessionRejected + historical rejected, with reasons
+│       │   ├── UploadDropzone.tsx    Drag-and-drop, per-file upload + polling loop
+│       │   ├── SessionGrid.tsx       In-place grid — processing → accepted in same slot
+│       │   ├── FileListItem.tsx      Left-panel upload row — stage label + icon
+│       │   ├── ImageCard.tsx         Thumbnail + pipeline badge + retry button  [R2]
+│       │   ├── AcceptedGrid.tsx      Historical accepted images (presentational)
+│       │   └── RejectedGrid.tsx      sessionRejected + historical rejected, with reasons
 │       ├── lib/
-│       │   ├── api.ts              requestUploadUrl, uploadDirect, validateUpload, del
-│       │   ├── rejectionMessages.ts enum → { label, tooltip }
-│       │   └── utils.ts            shadcn cn()
-│       ├── types.ts                Image, ImageStatus, RejectionReason, ImagesResponse
-│       ├── main.tsx                QueryClientProvider + Sonner Toaster
-│       └── App.tsx                 → UploadPage
+│       │   ├── api.ts                requestUploadUrl, uploadDirect, validateUpload, del
+│       │   │                         + getImageStatus, reprocessImage  [R2]
+│       │   ├── rejectionMessages.ts  enum → { label, tooltip }
+│       │   └── utils.ts              shadcn cn()
+│       ├── types.ts                  Image, ImageStatus, RejectionReason,
+│       │                             ProcessingStatus, ImageVariant  [R2]
+│       ├── main.tsx                  QueryClientProvider + Sonner Toaster
+│       └── App.tsx                   → UploadPage
 │
-└── server/                         Backend (Express + Prisma)
-    ├── prisma/
-    │   └── schema.prisma           Image model + enums + 3 indexes
-    └── src/
-        ├── routes/
-        │   └── images.ts           POST /upload-url, POST /:id/validate, GET /, DELETE /:id
-        ├── validators/
-        │   ├── format.ts           file-type magic-byte check
-        │   ├── dimensions.ts       sharp metadata → width/height/size
-        │   ├── blur.ts             Laplacian variance on 256×256 greyscale
-        │   ├── duplicate.ts        aHash + Hamming distance vs DB
-        │   ├── face.ts             face-api count + box-ratio
-        │   └── index.ts            runValidations() → Promise.all of heavy checks
-        ├── lib/
-        │   ├── supabase.ts         service-role client, uploadToStorage, deleteFromStorage
-        │   └── faceModel.ts        TinyFaceDetector — loadFromDisk once at boot, 640px resize
-        ├── index.ts                Express app, CORS, route mount, model preload
-        ├── db.ts                   Prisma client singleton
-        ├── schemas.ts              Zod: listImagesQuerySchema
-        └── config.ts               env var loading
+├── server/
+│   ├── prisma/
+│   │   └── schema.prisma             Image + enums + ImageVariant model  [R2]
+│   ├── scripts/
+│   │   ├── fetch-test-faces.ts       Downloads N unique face images for load test
+│   │   └── load-test.ts              [R2] concurrent upload + pipeline polling
+│   └── src/
+│       ├── workers/                  [R2] — each is a standalone Node.js entry point
+│       │   ├── convert.ts            JPEG normalise, strip EXIF, sRGB → enqueue compress
+│       │   ├── compress.ts           quality 85, track ratio → enqueue variants
+│       │   └── variants.ts           thumb/mobile/tablet/web/full → COMPLETE
+│       ├── lib/
+│       │   ├── redis.ts              [R2] ioredis connection singleton (Upstash TLS)
+│       │   ├── queue.ts              [R2] BullMQ Queue instances (convert/compress/variants)
+│       │   ├── supabase.ts           service-role client, upload/download/delete helpers
+│       │   └── faceModel.ts          TinyFaceDetector — loadFromDisk once at boot
+│       ├── routes/
+│       │   └── images.ts             All endpoints + enqueue trigger [R2] + /status [R2]
+│       ├── validators/
+│       │   ├── format.ts             file-type magic-byte check
+│       │   ├── dimensions.ts         sharp metadata → width/height/size
+│       │   ├── blur.ts               Laplacian variance on 256×256 greyscale
+│       │   ├── duplicate.ts          aHash + Hamming distance vs DB
+│       │   ├── face.ts               face-api count + box-ratio
+│       │   └── index.ts              runValidations() → Promise.all of heavy checks
+│       ├── index.ts                  Express app, CORS, route mount, model preload
+│       ├── db.ts                     Prisma client singleton
+│       ├── schemas.ts                Zod: listImagesQuerySchema, uploadUrlBodySchema
+│       └── config.ts                 env var loading
+│
+└── package.json                      root dev script — starts all 5 processes
 ```
+
+> Files marked `[R2]` are Round 2 additions.
 
 ---
 
@@ -490,14 +897,14 @@ Implemented inline with `sharp` (already a dependency) rather than adding `imgha
 | Cut | Why |
 |---|---|
 | Authentication / users | Not in spec; would cost 30+ min with no demo value |
-| Job queue (BullMQ + Redis) | Parallel sync requests deliver identical UX for single-user demo. Mentioned as production path in Loom |
-| WebSockets / SSE | Per-file HTTP responses give equivalent real-time feedback at this scale |
+| WebSockets / SSE | Polling every 2s gives equivalent real-time feedback at this scale |
 | pgvector similarity search | aHash + Hamming distance is sufficient for MVP duplicate detection |
-| Thumbnail resize / CDN transforms | Supabase serves originals; thumbnails are a production concern |
+| Bull Board admin UI | Would give queue-depth dashboard; skipped for time — Upstash console covers it |
+| mozjpeg encoder | Would reduce file size further; disabled for speed — toggle `mozjpeg: true` in sharp options |
 | Retry / resumable uploads | Files ≤ 15 MB on stable connection; retry adds complexity |
 | Rate limiting | Single-user demo scope |
-| PATCH /api/images/:id | `status` is server-determined — there's no field the user should edit |
-| Crop button on rejected cards | UI flourish from the spec screenshots; outside the core validation flow |
+| Crop button on rejected cards | UI flourish from spec screenshots; outside core validation flow |
+| FULL variant as separate upload | FULL = reference to compressed.jpg — saves one upload + one redundant file |
 
 ---
 
@@ -517,7 +924,7 @@ Implemented inline with `sharp` (already a dependency) rather than adding `imgha
 
 ## Local Development
 
-**Prerequisites:** Node 20+, a Supabase project with a Storage bucket named `AG-v1` (or update `STORAGE_BUCKET`).
+**Prerequisites:** Node 20+, Supabase project with a Storage bucket, Upstash Redis account (free tier).
 
 ```bash
 # 1. Clone and install
@@ -529,17 +936,40 @@ npm install --prefix server
 npm install --prefix client
 
 # 2. Environment
-cp .env.example .env
-# Fill in: DATABASE_URL, DIRECT_URL, SUPABASE_URL,
-#          SUPABASE_SERVICE_KEY, STORAGE_BUCKET
+cp server/.env.example server/.env
+# Fill in ALL variables — see Environment Variables section below
 
 # 3. Push schema to Supabase (run once, or after schema changes)
-cd server && npx prisma@6 db push
+cd server && npx prisma db push && npx prisma generate
 
-# 4. Start both servers (from repo root)
+# 4. Start everything — server + all 3 workers (from repo root)
 npm run dev
-# → client on http://localhost:5173
-# → server on http://localhost:3000
+# → client     on http://localhost:5173   (cyan)
+# → server     on http://localhost:3000   (yellow)
+# → convert    worker                     (green)
+# → compress   worker                     (blue)
+# → variants   worker                     (magenta)
+
+# Optional: start workers separately (for scaling experiments)
+npm run dev:workers --prefix server   # all 3 workers only (no server)
+npm run dev:convert --prefix server   # single worker
+```
+
+```bash
+# Load test (Round 2)
+# First time: fetch unique test face images
+npm run fetch-faces --prefix server -- --count=50
+
+# Run the load test
+npm run loadtest --prefix server -- --count=50 --concurrency=20
+
+# Optional flags
+npm run loadtest --prefix server -- \
+  --count=50          \ # total images to submit
+  --concurrency=20    \ # max in-flight simultaneously
+  --poll=1000         \ # status poll interval (ms)
+  --timeout=300000    \ # per-image timeout (ms)
+  --base-url=http://localhost:3000
 ```
 
 > **Face model:** bundled inside `node_modules/@vladmandic/face-api/model` — no manual download needed.
@@ -555,10 +985,13 @@ npm run dev
 | `SUPABASE_URL` | server | `https://<project-ref>.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | server | Service-role key — never exposed to client |
 | `STORAGE_BUCKET` | server | Supabase Storage bucket name (e.g. `AG-v1`) |
+| `UPSTASH_REDIS_URL` | server | **Round 2** — `rediss://default:<password>@<host>.upstash.io:6379` — from Upstash console → Database → Redis URL (use the `rediss://` TLS URL, not the REST URL) |
 | `PORT` | server | Default `3000` |
 | `NODE_ENV` | server | `development` \| `production` |
 | `CLIENT_URL` | server | Frontend origin for CORS (default `http://localhost:5173`) |
 | `VITE_API_URL` | client | Backend URL consumed by `api.ts` (default `http://localhost:3000`) |
+
+> **Upstash setup (5 minutes):** console.upstash.com → Create Database → Regional → copy the `rediss://` URL → paste as `UPSTASH_REDIS_URL` in `server/.env`.
 
 ---
 

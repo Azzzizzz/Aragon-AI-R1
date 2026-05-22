@@ -18,7 +18,7 @@ import { validateFormat } from '../validators/format.js'
 import { validateDimensions } from '../validators/dimensions.js'
 import { runValidations } from '../validators/index.js'
 import { listImagesQuerySchema, uploadUrlBodySchema, bulkDeleteBodySchema } from '../schemas.js'
-import { convertQueue } from '../lib/queue.js'
+import { convertQueue, compressQueue, variantsQueue } from '../lib/queue.js'
 
 export const imagesRouter = express.Router()
 
@@ -263,10 +263,17 @@ imagesRouter.post('/:id/reprocess', async (req: express.Request, res: express.Re
       },
     })
 
-    // 4. Re-enqueue. BullMQ rejects new jobs sharing a jobId with any prior job
-    // (including failed/completed), so we explicitly remove the previous one first.
-    // jobId=imageId still gives us deduplication for double-clicked reprocess buttons.
-    await convertQueue.remove(image.id).catch(() => undefined)
+    // 4. Re-enqueue. BullMQ silently deduplicates jobs that share a jobId with any
+    // prior job (failed or completed). If a previous run got past convert and into
+    // compress/variants before failing, those queues still hold the stale jobId.
+    // When convert re-runs and tries to enqueue compress with the same jobId, BullMQ
+    // returns the existing job without adding a new one — causing processingStatus to
+    // stay stuck at CONVERTING forever. Clear all three queues first.
+    await Promise.all([
+      convertQueue.remove(image.id).catch(() => undefined),
+      compressQueue.remove(image.id).catch(() => undefined),
+      variantsQueue.remove(image.id).catch(() => undefined),
+    ])
     await convertQueue.add(
       image.id,
       { imageId: image.id, storagePath: image.storagePath },
